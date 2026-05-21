@@ -235,8 +235,8 @@ def scan_for_macros(path: Path) -> list[dict]:
                             "description": f"Macro-enabled content type: {mct}",
                             "risk": "high",
                         })
-    except (zipfile.BadZipFile, OSError):
-        pass
+    except (zipfile.BadZipFile, OSError) as exc:
+        logging.getLogger(__name__).debug("macro scan skipped for %s: %s", path, exc)
     return findings
 
 
@@ -620,8 +620,8 @@ def restore_from_trash(trash_name: str) -> dict:
     if meta_file.exists():
         try:
             meta = json.loads(meta_file.read_text("utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as exc:
+            logging.getLogger(__name__).warning("corrupt trash metadata %s: %s", meta_file, exc)
 
     original = Path(meta.get("original_path", trash_file.name))
     if original.exists():
