@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onlyoffice-mcp"
+version = "0.2.0a1"
+description = "MCP server for creating, reading, editing and converting ONLYOFFICE-compatible documents (docx, xlsx, pptx) — pure Python with version history, charts, page styling, spell-check, find/replace and optional Document Builder / LibreOffice bridges."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "s-b-repo"}
+]
+keywords = ["mcp", "onlyoffice", "docx", "xlsx", "pptx", "office", "claude"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business",
+]
+dependencies = [
+    "mcp>=1.2.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=0.6.21",
+    "pydantic>=2.0",
+    "matplotlib>=3.7",
+    "lxml>=4.9",
+    "pyspellchecker>=0.7.2",
+]
+
+[project.optional-dependencies]
+pdf = ["pypdf>=4.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+onlyoffice-mcp = "onlyoffice_mcp.__main__:main"
+
+[project.urls]
+Documentation = "https://api.onlyoffice.com/docbuilder/basic"
+Source = "https://github.com/anthropics/claude-code"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
