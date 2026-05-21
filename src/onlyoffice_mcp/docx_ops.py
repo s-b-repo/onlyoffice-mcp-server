@@ -142,7 +142,8 @@ def _add_block(doc: Document, item: Any) -> None:
             try:
                 para.style = doc.styles[style]
             except KeyError:
-                pass
+                import logging
+                logging.getLogger(__name__).debug("list style %r not found, using default", style)
 
     else:
         raise ValueError(f"Unknown block type: {item_type!r}")
