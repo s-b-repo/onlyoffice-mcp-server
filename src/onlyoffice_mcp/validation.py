@@ -402,3 +402,51 @@ def validate_bounded_int(
 
 def format_for_path(path: str) -> str:
     return Path(path).suffix.lstrip(".").lower()
+
+
+# ---------------------------------------------------------------------------
+# Professional formatting validators
+# ---------------------------------------------------------------------------
+
+_LEGEND_POSITIONS = {
+    "best", "upper right", "upper left", "lower left", "lower right",
+    "right", "center left", "center right", "lower center", "upper center",
+    "center",
+}
+
+
+def validate_line_spacing(val: float) -> float:
+    if not isinstance(val, (int, float)) or val <= 0:
+        raise ValueError(
+            f"line_spacing must be a positive number, got {val!r}.\n"
+            f"Common values: 1.0 (single), 1.15, 1.5 (one-and-a-half), 2.0 (double).\n"
+            f"Values > 3 are treated as absolute point sizes."
+        )
+    return float(val)
+
+
+def validate_legend_position(pos: str) -> str:
+    p = pos.lower().strip()
+    if p not in _LEGEND_POSITIONS:
+        raise ValueError(
+            f"Invalid legend position: '{pos}'.\n"
+            f"Valid positions: {sorted(_LEGEND_POSITIONS)}"
+        )
+    return p
+
+
+def validate_list_level(level: int) -> int:
+    if not isinstance(level, int):
+        level = int(level)
+    return max(0, min(level, 5))
+
+
+def validate_indent(val: float) -> float:
+    if not isinstance(val, (int, float)):
+        raise ValueError(f"Indent must be a number, got {type(val).__name__}.")
+    if val < -144 or val > 720:
+        raise ValueError(
+            f"Indent value {val} out of range [-144, 720] points.\n"
+            f"Common values: 36 (0.5 inch), 72 (1 inch), 144 (2 inches)."
+        )
+    return float(val)

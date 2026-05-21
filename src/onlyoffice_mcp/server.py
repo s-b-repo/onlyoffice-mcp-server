@@ -111,15 +111,50 @@ def docx_create(
     `paragraphs` is a list where each item is either a plain string (a body
     paragraph) or a dict describing a block:
 
+      **Paragraph:**
       {"type": "paragraph", "text": "...", "style": "normal|heading1|...",
        "align": "left|center|right|justify", "bold": true, "italic": true,
-       "size": 12, "color": "#ff0000"}
-      {"type": "heading", "text": "...", "level": 1}
+       "underline": true, "strikethrough": true, "font": "Arial",
+       "size": 12, "color": "#ff0000",
+       "left_indent": 36, "right_indent": 0, "first_line_indent": 18,
+       "space_before": 6, "space_after": 6, "line_spacing": 1.15,
+       "keep_with_next": true}
+
+      **Heading (with formatting):**
+      {"type": "heading", "text": "...", "level": 1,
+       "alignment": "center", "bold": false, "italic": true,
+       "font_name": "Arial", "font_size": 28, "font_color": "navy",
+       "numbering_prefix": "1.1",
+       "space_before": 12, "space_after": 6}
+
+      **Table (with cell styling):**
       {"type": "table", "data": [[row], [row]], "header": true,
-       "style": "Light Grid Accent 1"}
+       "style": "Light Grid Accent 1",
+       "col_widths": [2.0, 3.0, 1.5],
+       "header_shading": "navy",
+       "cell_shading": {"1,0": "lightyellow", "2,1": "#FFE6E6"},
+       "cell_alignment": {"0,0": "center", "1,2": "right"}}
+
+      **Image:**
       {"type": "image", "path": "...", "width_inches": 4}
-      {"type": "list", "items": ["a", "b"], "ordered": false}
+
+      **Multi-level list:**
+      {"type": "list", "ordered": false, "bullet_char": "→",
+       "items": [
+         {"text": "Top level", "level": 0},
+         {"text": "Nested", "level": 1, "bold": true},
+         {"text": "Deep nested", "level": 2, "font_color": "red"},
+         "Plain string (level 0)"
+       ]}
+
       {"type": "pagebreak"}
+
+    **Indentation** (points): left_indent, right_indent,
+    first_line_indent (negative = hanging indent).
+    Common values: 36 = 0.5 inch, 72 = 1 inch.
+
+    **Spacing** (points): space_before, space_after.
+    **Line spacing**: 1.0 single, 1.5, 2.0 double. Values > 3 = point size.
 
     Returns the absolute path of the created file.
     """
@@ -149,8 +184,12 @@ def docx_read(path: str, include_tables: bool = True) -> dict:
 @_threaded
 @history.record_operation("docx_append")
 def docx_append(path: str, paragraphs: list[Any]) -> str:
-    """Append content blocks to an existing .docx file. `paragraphs` uses the
-    same schema as `docx_create`."""
+    """Append content blocks to an existing .docx file.
+
+    Uses the same block schema as `docx_create` — supports paragraph
+    (with indentation/spacing), heading (with formatting/numbering),
+    table (with cell shading/alignment/col widths), multi-level list
+    (with per-item formatting), image, and pagebreak blocks."""
     result = docx_ops.append(path, paragraphs)
     cursor.maybe_auto_advance(path, "docx_append")
     return result
@@ -1126,6 +1165,11 @@ def xlsx_add_chart(
     categories_range: str | None = None,
     anchor_cell: str = "E2",
     title: str | None = None,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    stacked: bool = False,
+    legend_position: str | None = None,
+    data_labels: bool = False,
 ) -> str:
     """Add a native editable chart to an .xlsx sheet.
 
@@ -1133,6 +1177,10 @@ def xlsx_add_chart(
     ``data_range``: A1-style range within the sheet, e.g. 'B1:C10'.
     ``categories_range``: optional labels range, e.g. 'A2:A10'.
     ``anchor_cell``: where to place the chart, e.g. 'E2'.
+    ``xlabel`` / ``ylabel``: axis labels.
+    ``stacked``: stack bars/area instead of grouping side by side.
+    ``legend_position``: 'bottom', 'top', 'left', 'right', 'top_right'.
+    ``data_labels``: show values on chart elements.
     First row of data_range is used as series title.
     """
     return charts.xlsx_add_chart(
@@ -1143,6 +1191,11 @@ def xlsx_add_chart(
         categories_range=categories_range,
         anchor_cell=anchor_cell,
         title=title,
+        xlabel=xlabel,
+        ylabel=ylabel,
+        stacked=stacked,
+        legend_position=legend_position,
+        data_labels=data_labels,
     )
 
 
@@ -1160,9 +1213,18 @@ def pptx_add_chart(
     width_inches: float = 8.0,
     height_inches: float = 5.0,
     title: str | None = None,
+    data_labels: bool = False,
+    legend_position: str | None = None,
+    stacked: bool = False,
 ) -> str:
-    """Add a native chart to a slide. For bar/line/pie/area each series is
-    {name, values}; for scatter each series is {name, x, y}."""
+    """Add a native chart to a slide.
+
+    For bar/line/pie/area each series is ``{name, values}``;
+    for scatter each series is ``{name, x, y}``.
+    ``data_labels``: show values on chart elements.
+    ``legend_position``: 'bottom', 'top', 'left', 'right', 'top_right'.
+    ``stacked``: stack bars/area (uses BAR_STACKED / AREA_STACKED types).
+    """
     return charts.pptx_add_chart(
         path,
         slide_index,
@@ -1174,6 +1236,9 @@ def pptx_add_chart(
         width_inches=width_inches,
         height_inches=height_inches,
         title=title,
+        data_labels=data_labels,
+        legend_position=legend_position,
+        stacked=stacked,
     )
 
 
@@ -1186,21 +1251,62 @@ def docx_add_chart(
     categories: list[Any],
     series: list[dict],
     title: str | None = None,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
     width_inches: float = 6.0,
     height_inches: float = 4.0,
     paragraph_index: int | None = None,
+    data_labels: bool = False,
+    legend_position: str = "best",
+    colors: list[str] | None = None,
+    stacked: bool = False,
+    horizontal: bool = False,
+    explode: list[float] | None = None,
+    donut: float | None = None,
+    line_styles: list[str] | None = None,
+    grid: bool = True,
+    dpi: int = 150,
 ) -> str:
-    """Render a chart with matplotlib and embed it as a static image in a
-    .docx. Note: result is a static image — NOT an editable chart."""
+    """Render a chart with matplotlib and embed it as a static image in a .docx.
+
+    Note: result is a static image — NOT an editable chart.
+
+    ``chart_type``: bar, line, pie, scatter, area (+ synonyms: column,
+    histogram, doughnut, donut, xy).
+    ``xlabel`` / ``ylabel``: axis labels (not used for pie).
+    ``data_labels``: show values on bars/slices/points.
+    ``legend_position``: 'best', 'upper right', 'upper left', 'lower left',
+      'lower right', 'center', etc.
+    ``colors``: list of hex or named colors for series/slices.
+    ``stacked``: stack bars/area instead of side-by-side.
+    ``horizontal``: horizontal bars (bar chart only).
+    ``explode``: list of floats (0.0-0.3) for pie slice offset.
+    ``donut``: hole ratio 0.0-0.8 for donut chart (pie only).
+    ``line_styles``: list of '-', '--', '-.', ':' per series (line only).
+    ``grid``: show gridlines (default true, not used for pie).
+    ``dpi``: image resolution (72=fast, 150=balanced, 300=print quality).
+    """
     return charts.docx_add_chart(
         path,
         chart_type,
         categories,
         series,
         title=title,
+        xlabel=xlabel,
+        ylabel=ylabel,
         width_inches=width_inches,
         height_inches=height_inches,
         paragraph_index=paragraph_index,
+        data_labels=data_labels,
+        legend_position=legend_position,
+        colors=colors,
+        stacked=stacked,
+        horizontal=horizontal,
+        explode=explode,
+        donut=donut,
+        line_styles=line_styles,
+        grid=grid,
+        dpi=dpi,
     )
 
 

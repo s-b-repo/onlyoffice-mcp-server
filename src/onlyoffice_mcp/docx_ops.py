@@ -33,7 +33,11 @@ STYLE_MAP: dict[str, str] = {
     "caption": "Caption",
     "list": "List Bullet",
     "bullet": "List Bullet",
+    "bullet2": "List Bullet 2",
+    "bullet3": "List Bullet 3",
     "numbered": "List Number",
+    "numbered2": "List Number 2",
+    "numbered3": "List Number 3",
 }
 
 ALIGN_MAP = {
@@ -56,6 +60,70 @@ def _apply_style(paragraph, style_name: str, doc: Document) -> str | None:
             f"Style '{style_name}' not found in template (defaulting to Normal). "
             f"Available: {available}"
         )
+
+
+def _apply_paragraph_format(para, block: dict) -> None:
+    """Apply indentation, spacing, and keep_with_next from block dict."""
+    pf = para.paragraph_format
+    if block.get("left_indent") is not None:
+        pf.left_indent = Pt(block["left_indent"])
+    if block.get("right_indent") is not None:
+        pf.right_indent = Pt(block["right_indent"])
+    if block.get("first_line_indent") is not None:
+        pf.first_line_indent = Pt(block["first_line_indent"])
+    if block.get("space_before") is not None:
+        pf.space_before = Pt(block["space_before"])
+    if block.get("space_after") is not None:
+        pf.space_after = Pt(block["space_after"])
+    if block.get("line_spacing") is not None:
+        val = block["line_spacing"]
+        if isinstance(val, (int, float)) and val > 3:
+            pf.line_spacing = Pt(val)
+        else:
+            pf.line_spacing = val
+    if block.get("keep_with_next") is not None:
+        pf.keep_with_next = block["keep_with_next"]
+
+
+def _apply_run_format(para, block: dict) -> None:
+    """Apply run-level formatting to all runs in a paragraph."""
+    has_fmt = any(block.get(k) is not None for k in (
+        "bold", "italic", "underline", "strikethrough",
+        "font", "font_name", "size", "font_size", "color", "font_color",
+    ))
+    if not has_fmt:
+        return
+    for run in para.runs:
+        if block.get("bold") is not None:
+            run.bold = block["bold"]
+        if block.get("italic") is not None:
+            run.italic = block["italic"]
+        if block.get("underline") is not None:
+            run.underline = block["underline"]
+        if block.get("strikethrough"):
+            run.font.strike = True
+        font_name = block.get("font") or block.get("font_name")
+        if font_name:
+            run.font.name = font_name
+        font_size = block.get("size") or block.get("font_size")
+        if font_size:
+            run.font.size = Pt(font_size)
+        color_val = block.get("color") or block.get("font_color")
+        if color_val:
+            c = validate_color(color_val)
+            run.font.color.rgb = RGBColor(
+                int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+            )
+
+
+def _set_cell_shading(cell, color_hex: str) -> None:
+    """Apply background shading to a table cell via OOXML."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    shading = OxmlElement("w:shd")
+    shading.set(qn("w:fill"), color_hex)
+    shading.set(qn("w:val"), "clear")
+    cell._tc.get_or_add_tcPr().append(shading)
 
 
 def _add_block(doc: Document, item: Any) -> None:
@@ -96,11 +164,19 @@ def _add_block(doc: Document, item: Any) -> None:
                     run.font.color.rgb = RGBColor(
                         int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
                     )
+        _apply_paragraph_format(para, item)
 
     elif item_type == "heading":
         text = sanitize_text(item.get("text", ""), "heading text")
         level = max(0, min(int(item.get("level", 1)), 9))
-        doc.add_heading(text, level=level)
+        if item.get("numbering_prefix"):
+            prefix = sanitize_text(str(item["numbering_prefix"]), "numbering prefix")
+            text = f"{prefix} {text}"
+        para = doc.add_heading(text, level=level)
+        if item.get("alignment"):
+            para.alignment = ALIGN_MAP.get(validate_align(item["alignment"]))
+        _apply_run_format(para, item)
+        _apply_paragraph_format(para, item)
 
     elif item_type == "table":
         data = item.get("data", [])
@@ -119,6 +195,27 @@ def _add_block(doc: Document, item: Any) -> None:
                 for paragraph in cell.paragraphs:
                     for run in paragraph.runs:
                         run.bold = True
+        if item.get("col_widths"):
+            for i, w in enumerate(item["col_widths"]):
+                if i < len(tbl.columns):
+                    tbl.columns[i].width = Inches(w)
+        if item.get("header_shading") and rows > 0:
+            hc = validate_color(item["header_shading"])
+            for cell in tbl.rows[0].cells:
+                _set_cell_shading(cell, hc)
+        if item.get("cell_shading"):
+            for key, color in item["cell_shading"].items():
+                ri, ci = (int(x) for x in key.split(","))
+                if 0 <= ri < rows and 0 <= ci < cols:
+                    _set_cell_shading(tbl.cell(ri, ci), validate_color(color))
+        if item.get("cell_alignment"):
+            for key, align in item["cell_alignment"].items():
+                ri, ci = (int(x) for x in key.split(","))
+                if 0 <= ri < rows and 0 <= ci < cols:
+                    a = ALIGN_MAP.get(validate_align(align))
+                    if a is not None:
+                        for p in tbl.cell(ri, ci).paragraphs:
+                            p.alignment = a
 
     elif item_type == "image":
         img_path = Path(item["path"]).expanduser().resolve()
@@ -136,14 +233,34 @@ def _add_block(doc: Document, item: Any) -> None:
     elif item_type == "list":
         items = item.get("items", [])
         ordered = item.get("ordered", False)
-        style = "List Number" if ordered else "List Bullet"
-        for line in items:
-            para = doc.add_paragraph(sanitize_text(str(line), "list item"))
-            try:
-                para.style = doc.styles[style]
-            except KeyError:
-                import logging
-                logging.getLogger(__name__).debug("list style %r not found, using default", style)
+        bullet_char = item.get("bullet_char")
+        bullet_styles = ["List Bullet", "List Bullet 2", "List Bullet 3"]
+        number_styles = ["List Number", "List Number 2", "List Number 3"]
+
+        for entry in items:
+            if isinstance(entry, str):
+                entry = {"text": entry, "level": 0}
+            text = sanitize_text(str(entry.get("text", "")), "list item")
+            level = max(0, min(int(entry.get("level", 0)), 5))
+
+            if bullet_char and not ordered:
+                para = doc.add_paragraph(f"{bullet_char} {text}")
+                para.paragraph_format.left_indent = Pt(36 * (level + 1))
+                if level > 0:
+                    para.paragraph_format.first_line_indent = Pt(-18)
+            else:
+                styles = number_styles if ordered else bullet_styles
+                style_name = styles[min(level, 2)]
+                para = doc.add_paragraph(text)
+                try:
+                    para.style = doc.styles[style_name]
+                except KeyError:
+                    pass
+                if level > 2:
+                    para.paragraph_format.left_indent = Pt(36 * (level + 1))
+
+            _apply_run_format(para, entry)
+            _apply_paragraph_format(para, entry)
 
     else:
         raise ValueError(f"Unknown block type: {item_type!r}")
