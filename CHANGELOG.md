@@ -7,6 +7,37 @@ and this project follows [PEP 440](https://peps.python.org/pep-0440/) for
 version numbers (`MAJOR.MINOR.PATCH` plus pre-release tags like `a1`, `b1`,
 `rc1`).
 
+## [0.3.0a6] — 2026-05-21 — ⚠️ ALPHA
+
+**This is an alpha release.** Professional document formatting: paragraph
+indentation/spacing, enhanced headings with formatting, multi-level nested
+lists, advanced chart customization, and table cell styling.
+
+### Added
+
+- **Paragraph indentation & spacing** — `left_indent`, `right_indent`,
+  `first_line_indent`, `space_before`, `space_after`, `line_spacing`,
+  `keep_with_next` on paragraph, heading, and list blocks
+- **Enhanced headings** — `alignment`, `bold`, `italic`, `underline`,
+  `font_name`, `font_size`, `font_color`, `numbering_prefix` on heading blocks
+- **Multi-level nested lists** — items as dicts with `text`, `level` (0-5),
+  per-item formatting (`bold`, `italic`, `font_color`, `font_size`),
+  custom `bullet_char` for bullet lists, styles up to "List Bullet 3" /
+  "List Number 3"
+- **Advanced docx charts** — `xlabel`, `ylabel`, `data_labels`, `colors`,
+  `legend_position`, `stacked`, `horizontal`, `explode`, `donut`,
+  `line_styles`, `grid`, `dpi` parameters on `docx_add_chart`
+- **Enhanced xlsx charts** — `xlabel`, `ylabel`, `stacked`, `legend_position`,
+  `data_labels` on `xlsx_add_chart`
+- **Enhanced pptx charts** — `stacked`, `data_labels`, `legend_position`
+  on `pptx_add_chart`
+- **Table cell styling** — `col_widths`, `header_shading`, `cell_shading`
+  (by "row,col" key), `cell_alignment` on table blocks
+- **New validators** — `validate_line_spacing`, `validate_legend_position`,
+  `validate_list_level`, `validate_indent` in validation.py
+- **New list styles** in STYLE_MAP — `bullet2`, `bullet3`, `numbered2`,
+  `numbered3`
+
 ## [0.3.0a5] — 2026-05-21 — ⚠️ ALPHA
 
 **This is an alpha release.** Safe error handling with AI retry guidance,
