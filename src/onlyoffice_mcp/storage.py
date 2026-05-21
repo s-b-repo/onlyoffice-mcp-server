@@ -24,7 +24,7 @@ from .errors import DocumentLocked
 
 DEFAULT_HOME = Path.home() / ".onlyoffice-mcp"
 ENV_HOME = "ONLYOFFICE_MCP_HOME"
-ENV_DISABLE_HISTORY = "ONLYOFFICE_MCP_HISTORY_ENABLED"
+ENV_HISTORY_ENABLED = "ONLYOFFICE_MCP_HISTORY_ENABLED"
 ENV_MAX_SNAPSHOTS = "ONLYOFFICE_MCP_HISTORY_MAX_SNAPSHOTS"
 ENV_MAX_BYTES = "ONLYOFFICE_MCP_HISTORY_MAX_BYTES"
 
@@ -45,7 +45,7 @@ def history_root() -> Path:
 
 
 def history_enabled() -> bool:
-    return os.environ.get(ENV_DISABLE_HISTORY, "true").lower() not in {
+    return os.environ.get(ENV_HISTORY_ENABLED, "true").lower() not in {
         "0", "false", "no", "off",
     }
 

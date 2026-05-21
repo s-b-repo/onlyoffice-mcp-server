@@ -36,6 +36,19 @@ _SUPPORTED_FORMATS = {
 }
 
 
+def _js_string_escape(s: str) -> str:
+    return (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("'", "\\'")
+        .replace("`", "\\`")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\0", "\\0")
+        .replace("${", "\\${")
+    )
+
+
 def find_binary() -> str | None:
     """Return the path to the documentbuilder binary, or None if not installed."""
     for candidate in _CANDIDATE_BINARIES:
@@ -110,7 +123,7 @@ def run(script: str, output_path: str | None = None, *, timeout: int = 120) -> s
         encoding="utf-8",
     ) as f:
         if out_path is not None:
-            f.write(f'var OUTPUT_PATH = "{out_path.as_posix()}";\n')
+            f.write(f'var OUTPUT_PATH = "{_js_string_escape(out_path.as_posix())}";\n')
         f.write(script)
         if out_path is not None and "SaveFile" not in script:
             ext = out_path.suffix.lstrip(".").lower()
@@ -157,7 +170,7 @@ def build_conversion_script(input_path: str, output_path: str) -> str:
             f"Supported: {sorted(_SUPPORTED_FORMATS)}"
         )
     return (
-        f'builder.OpenFile("{in_.as_posix()}");\n'
-        f'builder.SaveFile("{out_fmt}", "{out.as_posix()}");\n'
+        f'builder.OpenFile("{_js_string_escape(in_.as_posix())}");\n'
+        f'builder.SaveFile("{_js_string_escape(out_fmt)}", "{_js_string_escape(out.as_posix())}");\n'
         f'builder.CloseFile();\n'
     )

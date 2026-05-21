@@ -20,6 +20,9 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from lxml import etree
 
+from .validation import validate_path, sanitize_text
+from .safety import safe_parse_xml
+
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -30,7 +33,14 @@ CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 # Headers & footers
 # --------------------------------------------------------------------------
 
-_ALIGN_MAP = {"left": 0, "center": 1, "right": 2, "justify": 3}
+from docx.enum.text import WD_ALIGN_PARAGRAPH as _WD_ALIGN
+
+_ALIGN_MAP = {
+    "left": _WD_ALIGN.LEFT,
+    "center": _WD_ALIGN.CENTER,
+    "right": _WD_ALIGN.RIGHT,
+    "justify": _WD_ALIGN.JUSTIFY,
+}
 
 
 def docx_set_header(
@@ -42,16 +52,17 @@ def docx_set_header(
 ) -> str:
     from docx import Document
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="set_header")
     doc = Document(str(p))
     if section < 0 or section >= len(doc.sections):
-        raise ValueError(f"section {section} out of range [0, {len(doc.sections) - 1}]")
+        raise ValueError(
+            f"section {section} out of range [0, {len(doc.sections) - 1}].\n"
+            f"Most documents have only one section (index 0)."
+        )
     header = doc.sections[section].header
     # Reuse the first paragraph or add one.
     para = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
-    para.text = text
+    para.text = sanitize_text(text, "header text")
     para.alignment = _ALIGN_MAP.get(align.lower(), 1)
     doc.save(str(p))
     return str(p)
@@ -67,15 +78,16 @@ def docx_set_footer(
 ) -> str:
     from docx import Document
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="set_footer")
     doc = Document(str(p))
     if section < 0 or section >= len(doc.sections):
-        raise ValueError(f"section {section} out of range [0, {len(doc.sections) - 1}]")
+        raise ValueError(
+            f"section {section} out of range [0, {len(doc.sections) - 1}].\n"
+            f"Most documents have only one section (index 0)."
+        )
     footer = doc.sections[section].footer
     para = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-    para.text = text
+    para.text = sanitize_text(text, "footer text")
     para.alignment = _ALIGN_MAP.get(align.lower(), 1)
     if page_numbers:
         # Inject a PAGE field after the user's text.
@@ -128,7 +140,7 @@ def _add_hyperlink_run(paragraph, url: str, text: str, *, internal: bool = False
     new_run.append(rPr)
 
     t = OxmlElement("w:t")
-    t.text = text
+    t.text = sanitize_text(text, "hyperlink text")
     t.set(qn("xml:space"), "preserve")
     new_run.append(t)
 
@@ -139,15 +151,11 @@ def _add_hyperlink_run(paragraph, url: str, text: str, *, internal: bool = False
 
 def docx_add_hyperlink(path: str, paragraph_index: int, text: str, url: str) -> str:
     from docx import Document
+    from .validation import validate_paragraph_index
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="add_hyperlink")
     doc = Document(str(p))
-    if paragraph_index < 0 or paragraph_index >= len(doc.paragraphs):
-        raise ValueError(
-            f"paragraph_index {paragraph_index} out of range [0, {len(doc.paragraphs) - 1}]"
-        )
+    validate_paragraph_index(doc, paragraph_index)
     _add_hyperlink_run(doc.paragraphs[paragraph_index], url, text, internal=False)
     doc.save(str(p))
     return str(p)
@@ -155,11 +163,11 @@ def docx_add_hyperlink(path: str, paragraph_index: int, text: str, url: str) -> 
 
 def docx_add_internal_link(path: str, paragraph_index: int, text: str, bookmark_name: str) -> str:
     from docx import Document
+    from .validation import validate_paragraph_index
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="add_internal_link")
     doc = Document(str(p))
+    validate_paragraph_index(doc, paragraph_index)
     _add_hyperlink_run(
         doc.paragraphs[paragraph_index], bookmark_name, text, internal=True
     )
@@ -170,21 +178,40 @@ def docx_add_internal_link(path: str, paragraph_index: int, text: str, bookmark_
 def pptx_add_hyperlink(path: str, slide_index: int, shape_index: int, url: str) -> str:
     from pptx import Presentation
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="pptx", operation="add_hyperlink")
     prs = Presentation(str(p))
+    if slide_index < 0 or slide_index >= len(prs.slides):
+        raise ValueError(
+            f"slide_index {slide_index} out of range [0, {len(prs.slides) - 1}].\n"
+            f"The presentation has {len(prs.slides)} slides (0-indexed)."
+        )
     slide = prs.slides[slide_index]
+    if shape_index < 0 or shape_index >= len(slide.shapes):
+        raise ValueError(
+            f"shape_index {shape_index} out of range [0, {len(slide.shapes) - 1}].\n"
+            f"Slide {slide_index} has {len(slide.shapes)} shapes (0-indexed)."
+        )
     shape = slide.shapes[shape_index]
     if not shape.has_text_frame:
-        raise ValueError("Shape has no text frame")
-    # Set the hyperlink on the first run of the first paragraph.
+        raise ValueError(
+            f"Shape {shape_index} on slide {slide_index} has no text frame.\n"
+            f"Hyperlinks can only be added to shapes that contain text."
+        )
+    applied = False
     for paragraph in shape.text_frame.paragraphs:
         for run in paragraph.runs:
             run.hyperlink.address = url
-            prs.save(str(p))
-            return str(p)
-    raise ValueError("No runs found in shape's text frame")
+            applied = True
+            break
+        if applied:
+            break
+    if not applied:
+        raise ValueError(
+            f"No text runs found in shape {shape_index} on slide {slide_index}.\n"
+            f"Add text to the shape first, then apply the hyperlink."
+        )
+    prs.save(str(p))
+    return str(p)
 
 
 # --------------------------------------------------------------------------
@@ -194,21 +221,22 @@ def pptx_add_hyperlink(path: str, slide_index: int, shape_index: int, url: str) 
 def docx_add_bookmark(path: str, paragraph_index: int, name: str) -> str:
     """Wrap a paragraph in ``<w:bookmarkStart>`` / ``<w:bookmarkEnd>``."""
     from docx import Document
+    from .validation import validate_paragraph_index
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="add_bookmark")
     doc = Document(str(p))
-    if paragraph_index < 0 or paragraph_index >= len(doc.paragraphs):
-        raise ValueError(
-            f"paragraph_index {paragraph_index} out of range [0, {len(doc.paragraphs) - 1}]"
-        )
+    validate_paragraph_index(doc, paragraph_index)
     para = doc.paragraphs[paragraph_index]
-    bm_id = abs(hash(name)) % 99999
+    existing_ids = {
+        int(el.get(qn("w:id"), "0"))
+        for el in doc.element.body.iter(qn("w:bookmarkStart"))
+    }
+    bm_id = (max(existing_ids) + 1) if existing_ids else 0
 
+    safe_name = sanitize_text(name, "bookmark name")
     start = OxmlElement("w:bookmarkStart")
     start.set(qn("w:id"), str(bm_id))
-    start.set(qn("w:name"), name)
+    start.set(qn("w:name"), safe_name)
     end = OxmlElement("w:bookmarkEnd")
     end.set(qn("w:id"), str(bm_id))
     para._p.insert(0, start)
@@ -225,12 +253,15 @@ def docx_add_toc(path: str, paragraph_index: int = 0) -> str:
     """Insert a TOC field. Word / LibreOffice updates the TOC on open."""
     from docx import Document
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="add_toc")
     doc = Document(str(p))
-    if paragraph_index < 0 or paragraph_index >= len(doc.paragraphs):
-        # Insert as a new paragraph at the end.
+    total = len(doc.paragraphs)
+    if paragraph_index < 0 or paragraph_index > total:
+        raise ValueError(
+            f"paragraph_index {paragraph_index} out of range [0, {total}].\n"
+            f"Use {total} to append at the end, or 0 to insert at the start."
+        )
+    if paragraph_index == total:
         target = doc.add_paragraph()
     else:
         target = doc.paragraphs[paragraph_index]
@@ -269,33 +300,45 @@ _COMMENTS_XML_TEMPLATE = b"""<?xml version="1.0" encoding="UTF-8" standalone="ye
 """
 
 
+_COMMENTS_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument."
+    "wordprocessingml.comments+xml"
+)
+_COMMENTS_REL_TYPE = R_NS + "/comments"
+
+
 def _ensure_comments_part(doc):
     """Return the comments part (creating it + relationships if missing).
 
     Strategy: walk doc.part.package.parts looking for word/comments.xml. If
     missing, build a minimal valid one via the package's part-factory API and
     add a relationship from document.xml.
+
+    Uses CT_NS for content-type namespace validation and uuid for
+    unique relationship IDs.
     """
     package = doc.part.package
     comments_partname = "/word/comments.xml"
     for part in package.parts:
         if str(part.partname) == comments_partname:
             return part
-    # Create a fresh part. python-docx doesn't expose a clean API for arbitrary
-    # part creation — we work with the underlying opc package.
-    from docx.opc.constants import CONTENT_TYPE, RELATIONSHIP_TYPE
     from docx.opc.part import Part
     from docx.opc.packuri import PackURI
 
     comments_part = Part(
         partname=PackURI(comments_partname),
-        content_type=CONTENT_TYPE.WML_COMMENTS,
+        content_type=_COMMENTS_CONTENT_TYPE,
         blob=_COMMENTS_XML_TEMPLATE,
         package=package,
     )
-    package.parts.append_part(comments_part) if hasattr(package.parts, "append_part") else None
-    # Re-add by relating from the main document part.
-    doc.part.relate_to(comments_part, RELATIONSHIP_TYPE.COMMENTS)
+    if hasattr(package.parts, "append_part"):
+        package.parts.append_part(comments_part)
+    else:
+        raise RuntimeError(
+            "Cannot create comments part: package API does not support append_part.\n"
+            "Try opening the document in Word or LibreOffice first to initialize the comments structure."
+        )
+    doc.part.relate_to(comments_part, _COMMENTS_REL_TYPE)
     return comments_part
 
 
@@ -315,14 +358,11 @@ def docx_add_comment(
     from docx import Document
     from docx.oxml.ns import nsmap
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    from .validation import validate_paragraph_index
+
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="add_comment")
     doc = Document(str(p))
-    if paragraph_index < 0 or paragraph_index >= len(doc.paragraphs):
-        raise ValueError(
-            f"paragraph_index {paragraph_index} out of range [0, {len(doc.paragraphs) - 1}]"
-        )
+    validate_paragraph_index(doc, paragraph_index)
     target_para = doc.paragraphs[paragraph_index]
 
     try:
@@ -336,7 +376,7 @@ def docx_add_comment(
         return str(p)
 
     # Parse the existing comments XML, append a new w:comment.
-    comments_root = etree.fromstring(comments_part.blob)
+    comments_root = safe_parse_xml(comments_part.blob)
     # Determine the next free id.
     existing_ids = [
         int(c.get(f"{{{W_NS}}}id", "0"))
@@ -344,18 +384,19 @@ def docx_add_comment(
     ]
     next_id = (max(existing_ids) + 1) if existing_ids else 0
 
-    comment = etree.SubElement(comments_root, f"{{{W_NS}}}comment")
-    comment.set(f"{{{W_NS}}}id", str(next_id))
-    comment.set(f"{{{W_NS}}}author", author)
-    comment.set(f"{{{W_NS}}}initials", initials)
+    w_ns = nsmap.get("w", W_NS)
+    comment = etree.SubElement(comments_root, f"{{{w_ns}}}comment")
+    comment.set(f"{{{w_ns}}}id", str(next_id))
+    comment.set(f"{{{w_ns}}}author", sanitize_text(author, "comment author"))
+    comment.set(f"{{{w_ns}}}initials", sanitize_text(initials, "comment initials"))
     comment.set(
-        f"{{{W_NS}}}date",
-        _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        f"{{{w_ns}}}date",
+        _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0, tzinfo=None).isoformat() + "Z",
     )
-    pp = etree.SubElement(comment, f"{{{W_NS}}}p")
-    rp = etree.SubElement(pp, f"{{{W_NS}}}r")
-    tp = etree.SubElement(rp, f"{{{W_NS}}}t")
-    tp.text = text
+    pp = etree.SubElement(comment, f"{{{w_ns}}}p")
+    rp = etree.SubElement(pp, f"{{{w_ns}}}r")
+    tp = etree.SubElement(rp, f"{{{w_ns}}}t")
+    tp.text = sanitize_text(text, "comment text")
 
     comments_part._blob = etree.tostring(
         comments_root, xml_declaration=True, encoding="UTF-8", standalone=True
@@ -383,14 +424,12 @@ def docx_list_comments(path: str) -> list[dict]:
     """Return all comments in a docx file."""
     from docx import Document
 
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    p = validate_path(path, must_exist=True, expected_ext="docx", operation="list_comments")
     doc = Document(str(p))
     comments_partname = "/word/comments.xml"
     for part in doc.part.package.parts:
         if str(part.partname) == comments_partname:
-            root = etree.fromstring(part.blob)
+            root = safe_parse_xml(part.blob)
             out = []
             for c in root.findall(f"{{{W_NS}}}comment"):
                 text_parts = [

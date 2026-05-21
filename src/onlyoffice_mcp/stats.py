@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from . import cursor as cursor_mod
+
+log = logging.getLogger(__name__)
 
 
 _SENTENCE_RE = re.compile(r"[.!?]+(?:\s+|$)")
@@ -40,19 +43,19 @@ def _docx_stats(path: Path) -> dict[str, Any]:
     try:
         from lxml import etree
 
-        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        _wns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
         body_xml = doc.element.body
-        image_count = len(body_xml.xpath(".//w:drawing", namespaces=ns))
-        hyperlink_count = len(body_xml.xpath(".//w:hyperlink", namespaces=ns))
+        image_count = len(body_xml.findall(f".//{{{_wns}}}drawing"))
+        hyperlink_count = len(body_xml.findall(f".//{{{_wns}}}hyperlink"))
         # Comments live in word/comments.xml — check if the part exists.
         for part in doc.part.package.parts:
-            if part.partname and part.partname.endswith("/comments.xml"):
-                root = etree.fromstring(part.blob)
-                comment_count = len(root.findall(".//w:comment", namespaces=ns))
+            if part.partname and str(part.partname).endswith("/comments.xml"):
+                from .safety import safe_parse_xml
+                root = safe_parse_xml(part.blob)
+                comment_count = len(root.findall(f".//{{{_wns}}}comment"))
                 break
-    except Exception:
-        # Best-effort; don't crash stats on lxml hiccups.
-        pass
+    except Exception as exc:
+        log.warning("XML stats extraction failed for %s: %s", path, exc)
 
     return {
         "format": "docx",
@@ -92,9 +95,9 @@ def _xlsx_stats(path: Path) -> dict[str, Any]:
                 if cell.value is None:
                     continue
                 total_cells_used += 1
-                if isinstance(cell.value, str) and cell.value.startswith("="):
-                    formula_count += 1
-                elif cell.data_type == "f":
+                if cell.data_type == "f" or (
+                    isinstance(cell.value, str) and cell.value.startswith("=")
+                ):
                     formula_count += 1
 
     return {
@@ -155,4 +158,7 @@ def stats(path: str) -> dict[str, Any]:
         return _xlsx_stats(p)
     if ext == "pptx":
         return _pptx_stats(p)
-    raise ValueError(f"Unsupported format: {ext}")
+    raise ValueError(
+        f"Unsupported format for stats: '.{ext}'.\n"
+        f"Supported formats: docx, xlsx, pptx."
+    )

@@ -22,9 +22,17 @@ from typing import Any
 
 
 def _compile_pattern(pattern: str, *, regex: bool, case_sensitive: bool) -> re.Pattern:
+    if not pattern:
+        raise ValueError(
+            "Search pattern cannot be empty.\n"
+            "Provide a string to search for, or a regex pattern with regex=True."
+        )
     flags = 0 if case_sensitive else re.IGNORECASE
     if not regex:
         pattern = re.escape(pattern)
+        return re.compile(pattern, flags)
+    from .validation import validate_regex
+    validate_regex(pattern)
     return re.compile(pattern, flags)
 
 
@@ -47,9 +55,8 @@ def find_in_document(
       pptx:  {"slide_index": int, "shape_index": int, "paragraph_index": int,
               "char_offset": int}
     """
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    from .validation import validate_path
+    p = validate_path(path, must_exist=True, operation="find")
     ext = p.suffix.lstrip(".").lower()
     pat = _compile_pattern(pattern, regex=regex, case_sensitive=case_sensitive)
     results: list[dict] = []
@@ -72,6 +79,20 @@ def find_in_document(
         for idx, para in enumerate(doc.paragraphs):
             for m in pat.finditer(para.text):
                 _add({"paragraph_index": idx, "char_offset": m.start()}, m, para.text)
+        for t_idx, table in enumerate(doc.tables):
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    for m in pat.finditer(cell.text):
+                        _add(
+                            {
+                                "table_index": t_idx,
+                                "row": r_idx,
+                                "col": c_idx,
+                                "char_offset": m.start(),
+                            },
+                            m,
+                            cell.text,
+                        )
     elif ext == "xlsx":
         from openpyxl import load_workbook
 
@@ -117,6 +138,11 @@ def find_in_document(
                             m,
                             para.text,
                         )
+    else:
+        raise ValueError(
+            f"Unsupported format for search: '.{ext}'.\n"
+            f"Supported formats: docx, xlsx, pptx."
+        )
     return results
 
 
@@ -133,6 +159,8 @@ def _replace_in_paragraph_runs(para, pat: re.Pattern, replace: str) -> tuple[int
     applied = 0
     skipped = 0
 
+    original_joined = "".join(r.text for r in para.runs)
+
     # Per-run pass — covers in-run matches with formatting preservation.
     for run in para.runs:
         new_text, count = pat.subn(replace, run.text)
@@ -140,18 +168,18 @@ def _replace_in_paragraph_runs(para, pat: re.Pattern, replace: str) -> tuple[int
             run.text = new_text
             applied += count
 
-    # Span-crossing matches require joining runs.
-    joined = "".join(r.text for r in para.runs)
-    if pat.search(joined):
-        rewritten, count = pat.subn(replace, joined)
-        # Count only matches we haven't already handled.
-        extra = max(0, count - applied)
+    # Span-crossing matches: check the ORIGINAL joined text for matches
+    # that were not found in any individual run.
+    if pat.search(original_joined):
+        _, total_in_original = pat.subn(replace, original_joined)
+        extra = max(0, total_in_original - applied)
         if extra > 0 and para.runs:
-            para.runs[0].text = rewritten
+            full_replaced, _ = pat.subn(replace, original_joined)
+            para.runs[0].text = full_replaced
             for r in para.runs[1:]:
                 r.text = ""
-            applied += extra
-            skipped += extra  # we lost per-char formatting
+            applied = total_in_original
+            skipped += extra
 
     return applied, skipped
 
@@ -169,9 +197,8 @@ def replace_in_document(
     include_notes: bool = True,
 ) -> dict:
     """Replace ``find`` with ``replace`` in a document. Returns counts."""
-    p = Path(path).expanduser().resolve()
-    if not p.exists():
-        raise FileNotFoundError(p)
+    from .validation import validate_path
+    p = validate_path(path, must_exist=True, operation="replace")
     ext = p.suffix.lstrip(".").lower()
     pat = _compile_pattern(find, regex=regex, case_sensitive=case_sensitive)
 
@@ -209,6 +236,20 @@ def replace_in_document(
                 total_skipped += s
                 locations.append({"paragraph_index": idx, "count": a})
                 remaining -= a
+        for t_idx, table in enumerate(doc.tables):
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    if remaining <= 0:
+                        break
+                    for para in cell.paragraphs:
+                        a, s = _replace_in_paragraph_runs(para, pat, replace)
+                        if a:
+                            total_applied += min(a, remaining)
+                            total_skipped += s
+                            locations.append(
+                                {"table_index": t_idx, "row": r_idx, "col": c_idx, "count": a}
+                            )
+                            remaining -= a
         doc.save(str(p))
     elif ext == "xlsx":
         from openpyxl import load_workbook
@@ -276,7 +317,10 @@ def replace_in_document(
                         remaining -= a
         prs.save(str(p))
     else:
-        raise ValueError(f"Unsupported format: {ext}")
+        raise ValueError(
+            f"Unsupported format for replace: '.{ext}'.\n"
+            f"Supported formats: docx, xlsx, pptx."
+        )
 
     return {
         "replacements_made": total_applied,

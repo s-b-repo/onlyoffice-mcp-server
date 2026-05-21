@@ -120,7 +120,7 @@ def _iter_docx_words(path: Path):
             ctx_start = max(0, start - 16)
             ctx_end = min(len(text), m.end() + 16)
             context = text[ctx_start:ctx_end]
-            yield idx, m.group(), start, context
+            yield {"paragraph_index": idx}, m.group(), start, context
 
 
 def _iter_xlsx_words(path: Path):
@@ -250,25 +250,28 @@ def apply_corrections(
 
         doc = Document(str(p))
         for para in doc.paragraphs:
+            para_applied = 0
             for run in para.runs:
                 new_text, count = pattern.subn(
                     lambda m: corrections[m.group(1)], run.text
                 )
                 if count:
                     run.text = new_text
-                    applied += count
+                    para_applied += count
+            applied += para_applied
             if scope == "all":
-                # Fall back: rewrite whole paragraph text via the first run.
-                if pattern.search(para.text):
+                joined = "".join(r.text for r in para.runs)
+                if pattern.search(joined):
                     rewritten, count = pattern.subn(
-                        lambda m: corrections[m.group(1)], para.text
+                        lambda m: corrections[m.group(1)], joined
                     )
-                    if count > applied and para.runs:
+                    extra = count - para_applied
+                    if extra > 0 and para.runs:
                         para.runs[0].text = rewritten
                         for r in para.runs[1:]:
                             r.text = ""
-                        skipped += 0  # already applied
-                        applied = count
+                        applied += extra
+                        skipped += extra
         doc.save(str(p))
     elif ext == "xlsx":
         from openpyxl import load_workbook
@@ -311,13 +314,16 @@ def suggest_single(word: str, *, language: str = "en", max: int = 5) -> dict:
     """Look up suggestions for a single word."""
     engine_name, engine_obj = _engine(language)
     if engine_name == "pyspellchecker":
+        is_known = bool(engine_obj.known([word]))
         candidates = engine_obj.candidates(word) or set()
         suggestions = sorted(candidates - {word})[:max]
     else:
-        suggestions = _check_aspell([word], language=language).get(word, [])[:max]
+        aspell_result = _check_aspell([word], language=language)
+        is_known = word not in aspell_result
+        suggestions = aspell_result.get(word, [])[:max]
     return {
         "engine": engine_name,
         "word": word,
         "suggestions": suggestions,
-        "is_known": not suggestions,
+        "is_known": is_known,
     }
