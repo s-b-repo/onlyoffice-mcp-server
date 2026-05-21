@@ -41,11 +41,8 @@ _SYNONYMS = {
 
 
 def _normalise_kind(kind: str) -> str:
-    k = kind.lower()
-    k = _SYNONYMS.get(k, k)
-    if k not in _KINDS:
-        raise ValueError(f"Unsupported chart kind: {kind!r}. Supported: {_KINDS}")
-    return k
+    from .validation import validate_chart_type
+    return validate_chart_type(kind)
 
 
 def chart_kinds_info() -> dict:
@@ -89,7 +86,10 @@ def docx_add_chart(
     from docx import Document
     from docx.shared import Inches
 
+    from .validation import validate_series_data
+
     kind = _normalise_kind(chart_type)
+    validate_series_data(series, kind)
     out = Path(path).expanduser().resolve()
     if not out.exists():
         raise FileNotFoundError(out)
@@ -142,10 +142,11 @@ def docx_add_chart(
 
         doc = Document(str(out))
         if paragraph_index is not None and 0 <= paragraph_index < len(doc.paragraphs):
-            # Insert after the given paragraph by adding a new paragraph there.
             target = doc.paragraphs[paragraph_index]
-            run = target.add_run()
-            run.add_picture(tmp_path, width=Inches(width_inches))
+            doc.add_picture(tmp_path, width=Inches(width_inches))
+            pic_para = doc.element.body[-1]
+            doc.element.body.remove(pic_para)
+            target._p.addnext(pic_para)
         else:
             doc.add_picture(tmp_path, width=Inches(width_inches))
         doc.save(str(out))
@@ -190,14 +191,18 @@ def xlsx_add_chart(
         ScatterChart,
     )
 
+    from .validation import validate_cell_range, validate_sheet_name
+
     kind = _normalise_kind(chart_type)
+    validate_cell_range(data_range, "data_range")
+    if categories_range:
+        validate_cell_range(categories_range, "categories_range")
     out = Path(path).expanduser().resolve()
     if not out.exists():
         raise FileNotFoundError(out)
 
     wb = load_workbook(str(out))
-    if sheet not in wb.sheetnames:
-        raise ValueError(f"Sheet '{sheet}' not found. Available: {wb.sheetnames}")
+    validate_sheet_name(wb, sheet)
     ws = wb[sheet]
 
     # Pre-extend the sheet by writing None at the anchor cell to avoid Excel
@@ -256,7 +261,10 @@ def pptx_add_chart(
     from pptx.enum.chart import XL_CHART_TYPE
     from pptx.util import Inches
 
+    from .validation import validate_series_data
+
     kind = _normalise_kind(chart_type)
+    validate_series_data(series, kind)
     kind_map = {
         "bar": XL_CHART_TYPE.BAR_CLUSTERED,
         "line": XL_CHART_TYPE.LINE,

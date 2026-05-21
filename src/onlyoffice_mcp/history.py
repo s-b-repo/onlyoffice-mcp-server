@@ -368,7 +368,12 @@ def show_revision(path: str | Path, revision: int) -> dict:
     for r in log:
         if r.get("revision") == revision:
             return r
-    raise HistoryError(f"No such revision: {revision}")
+    available = sorted(r.get("revision", 0) for r in log)
+    raise HistoryError(
+        f"No such revision: {revision}.\n"
+        f"Available revisions: {available[-20:] if available else '(none)'}.\n"
+        f"Use doc_history to see all edits."
+    )
 
 
 def last_edit(path: str | Path) -> dict:
@@ -463,9 +468,10 @@ def revert(path: str | Path, revision: int) -> dict:
         )
     target = Path(path).expanduser().resolve()
     with storage.lock(target):
-        # Capture the "before revert" state so what_was_removed still works.
+        before_hash = storage.content_hash(target) if target.exists() else ""
         before_text = _text_for(target) if target.exists() else ""
         storage.atomic_write_bytes(target, snap.read_bytes())
+        after_hash = storage.content_hash(target)
         after_text = _text_for(target)
         diff_lines = _unified_diff(before_text, after_text)
         added, removed, summary = _summarise_diff(diff_lines)
@@ -476,8 +482,8 @@ def revert(path: str | Path, revision: int) -> dict:
             "revision": new_rev,
             "tool": "doc_revert",
             "args_summary": {"path": str(target), "revert_to": revision},
-            "before_hash": storage.content_hash(target),
-            "after_hash": storage.content_hash(target),
+            "before_hash": before_hash,
+            "after_hash": after_hash,
             "diff_summary": f"reverted to rev {revision}: {summary}",
             "text_diff_lines_added": added,
             "text_diff_lines_removed": removed,
@@ -535,8 +541,8 @@ def history_stats() -> dict:
                 ts = json.loads(meta_p.read_text("utf-8")).get("created_ts")
                 if ts is not None and (oldest_ts is None or ts < oldest_ts):
                     oldest_ts = ts
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("corrupt meta.json at %s: %s", meta_p, exc)
     return {
         "tracked_documents": len(docs),
         "total_disk_bytes": total_bytes,

@@ -7,8 +7,12 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import logging
+
 from . import history
 from .errors import CursorOutOfBounds
+
+log = logging.getLogger(__name__)
 
 
 _PAGE_BREAK_RE = re.compile(rb'<w:br[^>]*w:type="page"', re.IGNORECASE)
@@ -30,7 +34,7 @@ def estimate_docx_pages(path: str | Path) -> int:
         return 1
     explicit = len(_PAGE_BREAK_RE.findall(doc_xml))
     rendered = len(_LAST_RENDERED_RE.findall(doc_xml))
-    return max(1, 1 + explicit + rendered)
+    return max(1, 1 + max(explicit, rendered))
 
 
 def precise_docx_pages(path: str | Path, *, timeout: int = 60) -> int:
@@ -76,7 +80,8 @@ def _doc_bounds(path: Path) -> dict[str, Any]:
                 "paragraph_count": len(doc.paragraphs),
                 "page_estimate": estimate_docx_pages(path),
             }
-        except Exception:
+        except Exception as exc:
+            log.warning("docx bounds failed for %s: %s", path, exc)
             return {"paragraph_count": 0, "page_estimate": 1}
     if ext == "xlsx":
         try:
@@ -87,13 +92,15 @@ def _doc_bounds(path: Path) -> dict[str, Any]:
                 ws = wb[name]
                 sheets[name] = {"rows": ws.max_row or 1, "cols": ws.max_column or 1}
             return {"sheets": sheets}
-        except Exception:
+        except Exception as exc:
+            log.warning("xlsx bounds failed for %s: %s", path, exc)
             return {"sheets": {}}
     if ext == "pptx":
         try:
             from pptx import Presentation
             return {"slide_count": len(Presentation(str(path)).slides)}
-        except Exception:
+        except Exception as exc:
+            log.warning("pptx bounds failed for %s: %s", path, exc)
             return {"slide_count": 0}
     return {}
 
@@ -241,8 +248,8 @@ def maybe_auto_advance(path: str | Path, tool: str) -> None:
             cursor["slide_index"] = max(0, bounds.get("slide_count", 1) - 1)
         meta["cursor"] = cursor
         history._save_meta(p, meta)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("auto-advance failed for %s (%s): %s", path, tool, exc)
 
 
 def page_count(path: str | Path, precise: bool = False) -> dict:

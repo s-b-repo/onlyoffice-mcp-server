@@ -8,6 +8,8 @@ from typing import Any
 from pptx import Presentation
 from pptx.util import Inches, Pt
 
+from .validation import validate_path, validate_slide_def, sanitize_text, validate_color
+
 
 # python-pptx ships with the default Office template. Layout indexes:
 #   0 = Title Slide        (title + subtitle)
@@ -35,10 +37,10 @@ def _set_body_bullets(placeholder, bullets: list[str]) -> None:
     if not bullets:
         return
     tf = placeholder.text_frame
-    tf.text = str(bullets[0])
+    tf.text = sanitize_text(str(bullets[0]), "slide bullet")
     for line in bullets[1:]:
         p = tf.add_paragraph()
-        p.text = str(line)
+        p.text = sanitize_text(str(line), "slide bullet")
 
 
 def create(path: str, slides: list[dict]) -> str:
@@ -52,22 +54,21 @@ def create(path: str, slides: list[dict]) -> str:
          "left_inches": float, "top_inches": float, "width_inches": float}
       - {"layout": "blank"}
     """
-    out = Path(path).expanduser().resolve()
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out = validate_path(path, expected_ext="pptx", for_creation=True, operation="create")
     prs = Presentation()
 
     for slide_def in slides:
+        validate_slide_def(slide_def)
         layout_name = slide_def.get("layout", "content")
         slide = prs.slides.add_slide(_layout(prs, layout_name))
 
         # Title is always placeholder index 0 (when present).
         if slide.shapes.title and "title" in slide_def:
-            slide.shapes.title.text = str(slide_def["title"])
+            slide.shapes.title.text = sanitize_text(str(slide_def["title"]), "slide title")
 
         if layout_name == "title":
-            # Subtitle is placeholder index 1.
             if len(slide.placeholders) > 1 and "subtitle" in slide_def:
-                slide.placeholders[1].text = str(slide_def["subtitle"])
+                slide.placeholders[1].text = sanitize_text(str(slide_def["subtitle"]), "slide subtitle")
 
         elif layout_name == "content":
             body_items = slide_def.get("body", [])
@@ -88,7 +89,7 @@ def create(path: str, slides: list[dict]) -> str:
         # Add a notes block if requested.
         if slide_def.get("notes"):
             notes_tf = slide.notes_slide.notes_text_frame
-            notes_tf.text = str(slide_def["notes"])
+            notes_tf.text = sanitize_text(str(slide_def["notes"]), "speaker notes")
 
     prs.save(str(out))
     return str(out)
@@ -96,18 +97,17 @@ def create(path: str, slides: list[dict]) -> str:
 
 def read(path: str) -> dict:
     """Extract slide titles and body text from a .pptx file."""
-    in_ = Path(path).expanduser().resolve()
-    if not in_.exists():
-        raise FileNotFoundError(in_)
+    in_ = validate_path(path, must_exist=True, expected_ext="pptx", operation="read")
     prs = Presentation(str(in_))
     result: dict[str, Any] = {"slide_count": len(prs.slides), "slides": []}
-    for i, slide in enumerate(prs.slides, 1):
+    for i, slide in enumerate(prs.slides):
         info: dict[str, Any] = {"index": i, "title": "", "text": [], "notes": ""}
         title_shape = slide.shapes.title
+        title_el = title_shape._element if title_shape is not None else None
         if title_shape and title_shape.has_text_frame:
             info["title"] = title_shape.text_frame.text
         for shape in slide.shapes:
-            if shape is title_shape:
+            if title_el is not None and shape._element is title_el:
                 continue
             if not shape.has_text_frame:
                 continue
@@ -122,18 +122,17 @@ def read(path: str) -> dict:
 
 def add_slide(path: str, slide_def: dict) -> str:
     """Append a single slide to an existing .pptx file."""
-    in_ = Path(path).expanduser().resolve()
-    if not in_.exists():
-        raise FileNotFoundError(in_)
+    validate_slide_def(slide_def)
+    in_ = validate_path(path, must_exist=True, expected_ext="pptx", operation="add_slide")
     prs = Presentation(str(in_))
 
     layout_name = slide_def.get("layout", "content")
     slide = prs.slides.add_slide(_layout(prs, layout_name))
 
     if slide.shapes.title and "title" in slide_def:
-        slide.shapes.title.text = str(slide_def["title"])
+        slide.shapes.title.text = sanitize_text(str(slide_def["title"]), "slide title")
     if layout_name == "title" and len(slide.placeholders) > 1 and "subtitle" in slide_def:
-        slide.placeholders[1].text = str(slide_def["subtitle"])
+        slide.placeholders[1].text = sanitize_text(str(slide_def["subtitle"]), "slide subtitle")
     elif layout_name == "content":
         body_items = slide_def.get("body", [])
         if body_items and len(slide.placeholders) > 1:
@@ -149,5 +148,105 @@ def add_slide(path: str, slide_def: dict) -> str:
             width=Inches(slide_def.get("width_inches", 8.0)),
         )
 
+    if slide_def.get("notes"):
+        notes_tf = slide.notes_slide.notes_text_frame
+        notes_tf.text = sanitize_text(str(slide_def["notes"]), "speaker notes")
+
+    prs.save(str(in_))
+    return str(in_)
+
+
+def update_slide(
+    path: str,
+    slide_index: int,
+    *,
+    title: str | None = None,
+    body: list[str] | None = None,
+    notes: str | None = None,
+) -> dict:
+    """Edit an existing slide's title, body text, or speaker notes in place.
+
+    Only the parameters you provide are changed — everything else is preserved.
+    Returns the slide's state after editing.
+    """
+    from .validation import validate_slide_index
+
+    in_ = validate_path(path, must_exist=True, expected_ext="pptx", operation="update_slide")
+    prs = Presentation(str(in_))
+    validate_slide_index(prs, slide_index)
+    slide = prs.slides[slide_index]
+
+    if title is not None:
+        if slide.shapes.title and slide.shapes.title.has_text_frame:
+            slide.shapes.title.text = sanitize_text(str(title), "slide title")
+        else:
+            raise ValueError(
+                f"Slide {slide_index} has no title placeholder.\n"
+                f"Use a slide layout with a title (e.g. 'content' or 'title')."
+            )
+
+    if body is not None:
+        body_ph = None
+        for ph in slide.placeholders:
+            if ph.placeholder_format.idx == 1:
+                body_ph = ph
+                break
+        if body_ph is None or not body_ph.has_text_frame:
+            raise ValueError(
+                f"Slide {slide_index} has no body placeholder.\n"
+                f"Body text can only be set on slides with a 'content' layout."
+            )
+        _set_body_bullets(body_ph, body)
+
+    if notes is not None:
+        notes_tf = slide.notes_slide.notes_text_frame
+        notes_tf.text = sanitize_text(str(notes), "speaker notes")
+
+    prs.save(str(in_))
+
+    result: dict = {
+        "path": str(in_),
+        "slide_index": slide_index,
+        "title": "",
+        "body": [],
+        "notes": "",
+    }
+    if slide.shapes.title and slide.shapes.title.has_text_frame:
+        result["title"] = slide.shapes.title.text
+    title_el = slide.shapes.title._element if slide.shapes.title else None
+    for shape in slide.shapes:
+        if title_el is not None and shape._element is title_el:
+            continue
+        if shape.has_text_frame:
+            for para in shape.text_frame.paragraphs:
+                if para.text:
+                    result["body"].append(para.text)
+    if slide.has_notes_slide:
+        result["notes"] = slide.notes_slide.notes_text_frame.text
+    return result
+
+
+def delete_slide(path: str, slide_index: int) -> str:
+    """Delete a slide by 0-based index from a .pptx file."""
+    from .validation import validate_slide_index
+
+    in_ = validate_path(path, must_exist=True, expected_ext="pptx", operation="delete_slide")
+    prs = Presentation(str(in_))
+    validate_slide_index(prs, slide_index)
+    if len(prs.slides) <= 1:
+        raise ValueError(
+            "Cannot delete the last slide in a presentation.\n"
+            "A presentation must have at least one slide."
+        )
+    rId = prs.slides._sldIdLst[slide_index].get(
+        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+    )
+    if rId is None:
+        raise ValueError(
+            f"Could not find relationship ID for slide {slide_index}.\n"
+            f"The presentation's internal structure may be corrupted."
+        )
+    prs.part.drop_rel(rId)
+    del prs.slides._sldIdLst[slide_index]
     prs.save(str(in_))
     return str(in_)

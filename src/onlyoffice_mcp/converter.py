@@ -9,9 +9,11 @@ Order of preference:
 from __future__ import annotations
 
 import csv
+import shutil
 from pathlib import Path
 
 from . import docbuilder, docx_ops, libreoffice, pptx_ops, xlsx_ops
+from . import safety
 
 
 # Conversion pairs we can do purely in Python without any external engine.
@@ -29,18 +31,19 @@ def convert(input_path: str, output_path: str) -> str:
     Output format is inferred from ``output_path``'s extension. Engines are
     tried in order: Document Builder, LibreOffice, then Python fallbacks.
     """
-    in_ = Path(input_path).expanduser().resolve()
+    from .validation import validate_path
+
+    in_ = validate_path(input_path, must_exist=True, operation="convert")
     out = Path(output_path).expanduser().resolve()
-    if not in_.exists():
-        raise FileNotFoundError(in_)
     out.parent.mkdir(parents=True, exist_ok=True)
 
     in_ext = in_.suffix.lstrip(".").lower()
     out_ext = out.suffix.lstrip(".").lower()
 
-    # No-op short circuit: copying same format is just a file copy.
+    safety.validate_conversion_format(in_ext, out_ext)
+
     if in_ext == out_ext:
-        out.write_bytes(in_.read_bytes())
+        shutil.copy2(str(in_), str(out))
         return str(out)
 
     # 1. ONLYOFFICE Document Builder — widest format set.

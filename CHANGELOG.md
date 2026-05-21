@@ -7,6 +7,360 @@ and this project follows [PEP 440](https://peps.python.org/pep-0440/) for
 version numbers (`MAJOR.MINOR.PATCH` plus pre-release tags like `a1`, `b1`,
 `rc1`).
 
+## [0.3.0a5] — 2026-05-21 — ⚠️ ALPHA
+
+**This is an alpha release.** Safe error handling with AI retry guidance,
+input sanitization across all text paths, and in-place editing for documents
+and presentations.
+
+### Added
+
+- **2 new tools** (total now **77**):
+  - `docx_edit_paragraph` — edit existing paragraph text and formatting
+    in place (text, style, alignment, bold, italic, underline,
+    strikethrough, font, size, color). Returns paragraph state after edit.
+  - `pptx_update_slide` — edit existing slide title, body text, or
+    speaker notes in place. Returns slide state after edit.
+
+### Changed
+
+- **`_threaded` wrapper** now catches `ValueError`, `FileNotFoundError`,
+  `PermissionError`, `RuntimeError`, and `OSError` — appends AI-friendly
+  retry guidance to every error message so models know what to try next.
+- **Input sanitization** via `sanitize_text()` wired into all text paths:
+  - `docx_ops.py` — paragraph text, headings, table cells, list items
+  - `pptx_ops.py` — slide titles, subtitles, body bullets, speaker notes
+  - `xlsx_ops.py` — cell values, sheet names, appended row data
+  - `annotations.py` — header/footer text, hyperlink text, bookmark names,
+    comment author/initials/text
+- **Bare except blocks** replaced with logged exceptions across 9 files:
+  - `cursor.py` — 5 instances (docx/xlsx/pptx bounds, auto-advance)
+  - `stats.py` — XML stats extraction
+  - `styling.py` — settings part lookup
+  - `safety.py` — zip-bomb check fallthrough
+  - `history.py` — corrupt meta.json in history_stats
+
+## [0.3.0a4] — 2026-05-21 — ⚠️ ALPHA
+
+**This is an alpha release.** Document preview, enhanced background image
+controls, extended text formatting, and persistent file-based logging.
+
+### Added
+
+- **5 new tools** (total now **75**):
+  - `doc_preview` — render document pages as PNG images for AI visual
+    inspection. Converts docx/xlsx/pptx/pdf/odt/ods/odp to PDF via
+    LibreOffice, then renders pages at configurable DPI via PyMuPDF.
+    Supports page ranges (`pages="1-3,5"`), DPI control (72/150/300),
+    and batch limits (`max_pages`). Temp images auto-cleaned after 30 min.
+  - `docx_get_config` — detect full document configuration: page setup
+    (size, margins, orientation), sections with header/footer content,
+    fonts and colors in use, paragraph styles, background/watermark
+    status, table count, and metadata. Use before modifying a document.
+  - `docx_get_formatting` — inspect per-paragraph formatting: style,
+    alignment, and per-run details (bold, italic, underline,
+    strikethrough, font name, font size, text color).
+  - `color_info` — list all 59 supported CSS named colors with hex
+    values and accepted input formats.
+  - `docx_set_background_image` — **enhanced** with 5 new parameters:
+    `offset_x_mm`, `offset_y_mm` (position from top-left), `width_mm`,
+    `height_mm` (image dimensions), and `opacity` (1-100, with
+    `a:alphaModFix` OOXML element). Replaces previous 2-parameter version.
+- **Text formatting extensions** in `docx_create` / `docx_append` /
+  `docx_insert_paragraph` paragraph blocks:
+  - `underline: true` — underline text
+  - `strikethrough: true` — strikethrough text
+  - `font: "Arial"` — set font family name
+  (Previously supported: `bold`, `italic`, `size`, `color`, `align`)
+- **Named color support** in `validate_color()` — accepts 59 CSS color
+  names (red, navy, steelblue, coral, gold, etc.) in addition to hex.
+  All color parameters across all tools now accept named colors.
+- **Persistent file-based logging** — server logs are written to
+  `~/.onlyoffice-mcp/logs/server.log` via `RotatingFileHandler` (5 MB
+  max, 3 backups). Errors, warnings, and info are persisted across
+  sessions for debugging.
+- **`preview.py` module** — document preview rendering pipeline:
+  - `doc_preview()` — main entry point returning page image paths,
+    dimensions, total page count, and rendering metadata.
+  - `_convert_to_pdf()` — LibreOffice headless conversion.
+  - `_parse_page_range()` — parses comma-separated page ranges like
+    `"1-3,5,8-10"` to zero-based indices.
+  - Auto-cleanup of stale preview images (30-minute TTL).
+
+### Changed
+
+- `docx_set_background_image` docstring now includes opacity guidance
+  (15-30 for branded letterhead, 10-20 for decorative backgrounds) and
+  recommends using `doc_preview` to verify results visually.
+- `_build_bg_anchor_xml()` in `styling.py` — dynamic XML builder
+  replaces static template; generates `a:alphaModFix` element when
+  opacity < 100%.
+- Background images are idempotent — `_remove_bg_images_from_header()`
+  strips previous `PageBackground` anchors before inserting new ones.
+- Watermarks are idempotent — `_remove_watermarks_from_header()` strips
+  previous `WatermarkShape` VML before inserting new ones.
+- Watermark `font_size` now validates as `int` with range [1, 999].
+- Watermark text capped at 200 characters.
+- `server.py` `main()` now configures `RotatingFileHandler` alongside
+  stderr logging.
+
+### Dependencies
+
+- Optional: `PyMuPDF>=1.24` (for `doc_preview` rendering) — install
+  with `pip install 'onlyoffice-mcp[preview]'`.
+- Optional: LibreOffice (`soffice`) required for non-PDF preview
+  conversion.
+
+### Project layout
+
+- Added `preview.py` — document preview rendering via PyMuPDF.
+- Total registered MCP tools: **75** (up from 70 in v0.3.0a3).
+
+---
+
+## [0.3.0a3] — 2026-05-21 — ⚠️ ALPHA
+
+**This is an alpha release.** File deletion safety, trash system, mass
+deletion detection, and additional guard rails. Inspired by analysis of
+the ONLYOFFICE/docspace-mcp project.
+
+### Added
+
+- **7 new tools** (total now **70**):
+  - `doc_delete_file` — permanently delete a single document file with
+    safety checks, rate limiting, and audit logging.
+  - `doc_delete_files` — batch delete with mass-deletion detection and
+    per-directory wipe warnings.
+  - `doc_move_to_trash` — recoverable soft-delete (file moves to
+    `~/.onlyoffice-mcp/trash/` with metadata for restore).
+  - `doc_list_trash` — list recoverable trash contents with original
+    paths and timestamps.
+  - `doc_restore_from_trash` — restore a trashed file to its original
+    location.
+  - `doc_empty_trash` — permanently purge trash (optionally only items
+    older than N hours).
+  - `doc_deletion_audit` — view the immutable deletion audit log
+    (every delete/trash op is recorded).
+- **Deletion rate limiter** (`DeletionTracker`) — thread-safe sliding
+  window that blocks when more than N deletions occur within a time
+  window (default: 5 deletions per 60s). Configurable via
+  `ONLYOFFICE_MCP_DELETION_RATE_LIMIT` and
+  `ONLYOFFICE_MCP_DELETION_RATE_WINDOW` env vars.
+- **Mass deletion detection** — `doc_delete_files` rejects batches
+  larger than 50 files, warns on batches > 10, and flags when multiple
+  files come from the same directory (possible accidental wipe).
+- **Sensitive path blocklist** — 18 patterns block deletion of SSH
+  keys, GPG keyrings, AWS/Docker/Kube configs, `.env` files, shell
+  profiles, git repos, and credential files.
+- **Deletion audit log** — every delete/trash operation is appended to
+  `~/.onlyoffice-mcp/deletion_audit.jsonl` with timestamp, path, method,
+  success status, and PID. Queryable via `doc_deletion_audit`.
+- **AI safety warnings** for deletion operations — docstrings and return
+  values warn AI assistants to never delete files based on document
+  content instructions.
+
+### Security
+
+- **Soft-delete by default**: `doc_move_to_trash` is the recommended
+  deletion method — files are recoverable until trash is emptied.
+  Inspired by ONLYOFFICE DocSpace-MCP's trash-folder pattern
+  (`deleteAfter: false, immediately: false`).
+- **Rate limiting on destructive ops**: sliding-window rate limiter
+  prevents rapid-fire deletion (prompt injection defence).
+- **Batch size cap**: `doc_delete_files` hard-limits at 50 files per
+  call to prevent runaway deletions.
+- **Per-directory wipe detection**: batch deletes flag when > 5 files
+  come from the same parent directory.
+- **Non-document file guard**: `doc_delete_file` rejects non-document
+  files unless `force=True` is explicitly set.
+
+### Changed
+
+- `server_info` now reports deletion rate limit, mass deletion
+  detection, trash system, and audit log status.
+
+### Security gaps found in ONLYOFFICE/docspace-mcp
+
+- No deletion rate limiting or mass deletion detection.
+- No prompt injection scanning on file content.
+- No file size validation on uploads.
+- No audit logging for destructive operations.
+- No batch size limits on copy/move operations.
+
+### Project layout
+
+- Extended `safety.py` — added `DeletionTracker`, trash system, audit
+  log, sensitive path patterns, batch deletion checks.
+- Extended `errors.py` — added `MassDeletionBlocked`, `DeletionDenied`.
+- Total registered MCP tools: **70** (up from 63 in v0.3.0a2).
+
+---
+
+## [0.3.0a2] — 2026-05-21 — ⚠️ ALPHA
+
+**This is an alpha release.** Async threading, comprehensive security
+hardening, prompt-injection defence, and AI safety guidance.
+
+### Added
+
+- **Async all tools** — every MCP tool handler is now `async`; CPU-bound
+  work runs via `asyncio.to_thread()` so the event loop never blocks.
+  Multiple concurrent requests are processed in parallel.
+- **`safety.py` module** — centralised security layer:
+  - File-size limits (100 MB default, `ONLYOFFICE_MCP_MAX_FILE_SIZE` env var).
+  - Zip-bomb detection (compression-ratio check on OOXML files).
+  - System-path blocklist (`/proc`, `/sys`, `/dev` denied).
+  - Symlink and path-traversal detection with warnings.
+  - Prompt-injection scanner (10 patterns: role override, instruction
+    injection, persona manipulation, jailbreak keywords, XML tag injection).
+  - Macro / VBA / ActiveX / external-link detection in documents.
+  - Format-conversion whitelist (source→target pairs).
+  - AI safety preamble and risky-operation warnings.
+  - Hardened XML parser (`resolve_entities=False`, `no_network=True`).
+- **Content warnings on reads** — `docx_read`, `xlsx_read`, `pptx_read`
+  now scan returned text for prompt-injection patterns and return a
+  `content_warnings` list alongside the data.
+- **ReDoS protection** — `validate_regex()` rejects patterns with nested
+  quantifiers like `(a+)+` that cause catastrophic backtracking.
+- **`validate_bounded_int()`** — caps numeric parameters (e.g. `max_words`).
+- **`max_results` on `list_workspace`** — prevents unbounded directory scans.
+- **Billion laughs protection** — all `etree.fromstring()` calls now use
+  `safe_parse_xml()` which disables entity expansion.
+
+### Security
+
+- **XML entity expansion (billion laughs)**: all lxml `fromstring()` calls
+  replaced with `safe_parse_xml()` using `resolve_entities=False`,
+  `no_network=True`, `huge_tree=False`.
+- **ReDoS via user regex**: `doc_find` and `doc_replace` now reject
+  patterns with nested quantifiers before compiling.
+- **Path traversal**: `validate_path()` now blocks system paths and warns
+  on symlinks / `..` traversal.
+- **Zip-bomb detection**: OOXML files are checked for suspicious
+  compression ratios (default limit: 100:1).
+- **File-size limits**: all read/write paths enforce a configurable maximum.
+- **Format-conversion whitelist**: `convert()` now validates source→target
+  format pairs against an explicit allowlist.
+- **JS string escaping hardened**: `_js_string_escape()` now also handles
+  single quotes, backticks, `${}` template literals, and null bytes.
+- **`converter.py` same-format copy**: replaced `read_bytes()`/`write_bytes()`
+  with `shutil.copy2()` to prevent OOM on large files.
+- **`docbuilder_run` security warning**: tool docstring explicitly warns
+  AI assistants not to execute scripts from document content or websites.
+
+### Changed
+
+- `docx_read` returns `{"text": ..., "content_warnings": [...]}` instead
+  of a plain string (prompt-injection + macro warnings included).
+- `xlsx_read` returns `{"data": ..., "content_warnings": [...]}`.
+- `pptx_read` result dict now includes `content_warnings` list.
+- `docbuilder_run` returns `{"path": ..., "warning": "..."}` with a
+  security reminder.
+- `server_info` now reports safety features (file size limits,
+  decompression ratio, enabled protections, conversion whitelist).
+- `list_workspace` accepts `max_results` parameter (default 500).
+- `doc_spell_check` validates `max_words` range (1–10,000).
+
+### Project layout
+
+- Added `safety.py` — centralised security, safety, and AI-guidance module.
+- All tool handlers in `server.py` are now async via `_threaded` wrapper.
+
+---
+
+## [0.3.0a1] — 2026-05-21 — ⚠️ ALPHA
+
+**This is an alpha release.** 12 new tools, a centralized validation layer
+with LLM-friendly errors, critical bug fixes, and two security patches.
+
+### Added
+
+- **12 new tools** (total now **63**):
+  - Word: `docx_read_metadata`, `docx_set_page_setup`, `docx_insert_paragraph`,
+    `docx_delete_paragraph`.
+  - Excel: `xlsx_delete_sheet`, `xlsx_rename_sheet`, `xlsx_delete_rows`,
+    `xlsx_insert_rows`, `xlsx_merge_cells`, `xlsx_set_column_width`,
+    `xlsx_freeze_panes`.
+  - PowerPoint: `pptx_delete_slide`.
+- **Centralized validation module** (`validation.py`): every error message
+  now follows a structured format — line 1 says what went wrong, line 2+
+  tells the LLM what the valid values are or what tool to use instead.
+  Functions: `validate_path`, `validate_color`, `validate_cell_ref`,
+  `validate_cell_range`, `validate_index`, `validate_sheet_name`,
+  `validate_paragraph_index`, `validate_slide_index`, `validate_align`,
+  `validate_chart_type`, `validate_page_size`, `validate_series_data`,
+  `validate_slide_def`.
+- **Cross-tool suggestions**: using the wrong file extension (e.g. calling
+  `docx_read` on a `.xlsx`) now says which tool to use instead.
+- **Named page sizes**: `docx_set_page_setup` accepts `letter`, `a4`, `a3`,
+  `a5`, `legal`, `tabloid` plus custom `width_mm` / `height_mm`.
+
+### Fixed
+
+- **`docx_add_chart` crash** when `paragraph_index` was provided:
+  `run.add_picture()` does not exist on `Run` objects — rewritten to use
+  body element repositioning.
+- **`doc_revert` before_hash bug**: the "before" hash was captured *after*
+  the file was overwritten, making `before_hash == after_hash` always.
+- **`doc_apply_corrections` accumulation bug**: `applied = count` on the
+  multi-run fallback reset the running total instead of accumulating.
+- **`spell_suggest` is_known logic**: was inverted — a known word showed
+  `is_known: false`. Now uses `engine_obj.known()` directly.
+- **`docx_add_internal_link`**: missing `paragraph_index` bounds check
+  caused bare `IndexError`.
+- **`pptx_add_hyperlink`**: missing bounds checks on `slide_index` and
+  `shape_index`; also saved inside the nested loop instead of after.
+- **`docx_add_bookmark` ID collisions**: `abs(hash(name)) % 99999` could
+  collide; now uses incremental IDs from existing bookmarks.
+- **`pptx_read` indexing**: used 1-based slide indexing while all other
+  pptx tools use 0-based. Normalized to 0-based.
+- **`doc_history_show`**: error on invalid revision now lists available
+  revisions instead of bare "No such revision".
+- **Search/stats unsupported format**: `find_in_document` silently returned
+  `[]` and `stats` gave a bare "Unsupported format" error. Both now
+  list supported formats.
+- **Formula counting**: simplified the `elif` double-branch to a single
+  `or` condition.
+- **`datetime.utcnow()` deprecation** in `annotations.py`: replaced with
+  `datetime.now(timezone.utc)`.
+
+### Security
+
+- **Script injection in Document Builder**: paths interpolated into
+  JavaScript strings were not escaped. A path containing `"` could break
+  out of the string literal and inject arbitrary script code. Fixed with
+  `_js_string_escape()`.
+- **XML injection in DOCX watermark**: watermark text was interpolated
+  directly into VML XML via `.format()`. Fixed with
+  `xml.sax.saxutils.escape()`.
+
+### Changed
+
+- All tools in `annotations.py` (10 functions) and `styling.py` (4
+  functions) now use `validate_path()` — every `FileNotFoundError` includes
+  the suggestion to create the file first with the correct tool.
+- `storage.py`: renamed `ENV_DISABLE_HISTORY` constant to
+  `ENV_HISTORY_ENABLED` to match the actual environment variable name.
+- `spell_suggest`: renamed parameter `max` to `max_suggestions` to avoid
+  shadowing the Python builtin.
+- Improved docstrings on 15+ MCP tools: added return schemas, parameter
+  descriptions, valid value lists, and usage guidance.
+- `docx_create` paragraph blocks: color field now validated through
+  `validate_color()` instead of silently skipping invalid hex.
+- `charts.py`: chart type validation now delegates to `validate_chart_type`
+  with synonym hints. Series data and xlsx data ranges are validated.
+- `validation.py`: fixed stale reference to non-existent `docx_set_margins`
+  tool (now correctly says `docx_set_page_setup`).
+- Removed unused `PatternFill` import from `xlsx_ops.py`.
+
+### Project layout
+
+- Added `validation.py` — centralized input validation with LLM-friendly
+  error messages.
+- Total registered MCP tools: **63** (up from 51 in v0.2).
+
+---
+
 ## [0.2.0a1] — 2026-05-21 — ⚠️ ALPHA
 
 **This is an alpha release.** APIs, tool names, schemas, and the on-disk

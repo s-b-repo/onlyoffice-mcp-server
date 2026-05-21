@@ -46,3 +46,21 @@ class DocumentLocked(OnlyOfficeMCPError):
 
 class UnsupportedFormat(OnlyOfficeMCPError):
     """The operation is not supported for the given file extension."""
+
+
+class MassDeletionBlocked(OnlyOfficeMCPError):
+    """Too many files were deleted in a short time window.
+
+    This is a safety mechanism to prevent accidental or malicious bulk
+    deletion. The threshold and time window are configurable via
+    environment variables.
+    """
+
+
+class DeletionDenied(OnlyOfficeMCPError):
+    """A file deletion was rejected by the safety layer.
+
+    Common causes: the file is outside the allowed workspace, the path
+    points to a sensitive location, or the deletion would exceed the
+    rate limit.
+    """
