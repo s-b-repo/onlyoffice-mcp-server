@@ -1,0 +1,47 @@
+// ONLYOFFICE Document Builder example: hello-world DOCX with heading + table.
+// Run via the MCP tool `docbuilder_run` with output_path="/tmp/hello.docx"
+// or directly: documentbuilder hello_world.docbuilder
+
+builder.CreateFile("docx");
+var oDocument = Api.GetDocument();
+
+// Heading
+var oHeading = Api.CreateParagraph();
+oHeading.SetSpacingBefore(0);
+oHeading.SetSpacingAfter(200);
+var oHeadingRun = oHeading.AddText("Hello from ONLYOFFICE Document Builder");
+oHeadingRun.SetFontSize(28);
+oHeadingRun.SetBold(true);
+oDocument.Push(oHeading);
+
+// Body paragraph
+var oBody = Api.CreateParagraph();
+oBody.AddText(
+    "This document was generated programmatically using the ONLYOFFICE " +
+    "Document Builder via a Python MCP server."
+);
+oDocument.Push(oBody);
+
+// Small table
+var oTable = Api.CreateTable(3, 2);
+oTable.SetTableStyle(oDocument.GetStyle("Light Grid Accent 1"));
+var headers = ["Item", "Value"];
+for (var c = 0; c < 2; c++) {
+    var cell = oTable.GetRow(0).GetCell(c);
+    var p = cell.GetContent().GetElement(0);
+    var r = p.AddText(headers[c]);
+    r.SetBold(true);
+}
+var rows = [["Format", "DOCX"], ["Engine", "ONLYOFFICE DocBuilder"]];
+for (var r = 0; r < rows.length; r++) {
+    for (var c = 0; c < 2; c++) {
+        var cell = oTable.GetRow(r + 1).GetCell(c);
+        cell.GetContent().GetElement(0).AddText(rows[r][c]);
+    }
+}
+oDocument.Push(oTable);
+
+// NOTE: the MCP server appends builder.SaveFile()/CloseFile() automatically
+// when output_path is given, but you can also call it explicitly:
+// builder.SaveFile("docx", "/tmp/hello.docx");
+// builder.CloseFile();
