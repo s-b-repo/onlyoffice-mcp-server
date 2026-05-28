@@ -13,7 +13,10 @@ from docx import Document
 from docx.shared import Inches, Mm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-from .validation import validate_path, validate_color, validate_align, sanitize_text
+from .validation import (
+    validate_path, validate_color, validate_align, sanitize_text,
+    validate_choice, validate_bounded_int,
+)
 
 # Map of friendly style names to python-docx style names. python-docx loads
 # the default Office template which ships with these names.
@@ -107,7 +110,7 @@ def _apply_run_format(para, block: dict) -> None:
             run.font.name = font_name
         font_size = block.get("size") or block.get("font_size")
         if font_size:
-            run.font.size = Pt(font_size)
+            run.font.size = _pt(font_size, "size")
         color_val = block.get("color") or block.get("font_color")
         if color_val:
             c = validate_color(color_val)
@@ -124,6 +127,37 @@ def _set_cell_shading(cell, color_hex: str) -> None:
     shading.set(qn("w:fill"), color_hex)
     shading.set(qn("w:val"), "clear")
     cell._tc.get_or_add_tcPr().append(shading)
+
+
+def _pt(val, name="size"):
+    """Coerce a points value, raising an AI-friendly error on bad input."""
+    try:
+        return Pt(float(val))
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number of points, got {val!r}.") from None
+
+
+def _int_in(val, name, lo, hi):
+    """Coerce an int and clamp to [lo, hi], with a friendly error on bad input."""
+    try:
+        return max(lo, min(int(val), hi))
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer {lo}-{hi}, got {val!r}.") from None
+
+
+def _parse_rc(key, rows, cols):
+    """Parse a 'row,col' cell key and bounds-check it against the table."""
+    try:
+        ri, ci = (int(x) for x in str(key).split(","))
+    except (ValueError, TypeError):
+        raise ValueError(
+            f"cell key {key!r} must be 'row,col' with integers, e.g. '1,0' or '0,2'."
+        ) from None
+    if not (0 <= ri < rows and 0 <= ci < cols):
+        raise ValueError(
+            f"cell key '{key}' is out of range for a {rows} row x {cols} column table."
+        )
+    return ri, ci
 
 
 def _add_block(doc: Document, item: Any) -> None:
@@ -158,7 +192,7 @@ def _add_block(doc: Document, item: Any) -> None:
                 if item.get("font"):
                     run.font.name = item["font"]
                 if item.get("size"):
-                    run.font.size = Pt(item["size"])
+                    run.font.size = _pt(item["size"], "size")
                 if item.get("color"):
                     color = validate_color(item["color"])
                     run.font.color.rgb = RGBColor(
@@ -168,7 +202,7 @@ def _add_block(doc: Document, item: Any) -> None:
 
     elif item_type == "heading":
         text = sanitize_text(item.get("text", ""), "heading text")
-        level = max(0, min(int(item.get("level", 1)), 9))
+        level = _int_in(item.get("level", 1), "heading level", 0, 9)
         if item.get("numbering_prefix"):
             prefix = sanitize_text(str(item["numbering_prefix"]), "numbering prefix")
             text = f"{prefix} {text}"
@@ -182,6 +216,11 @@ def _add_block(doc: Document, item: Any) -> None:
         data = item.get("data", [])
         if not data:
             return
+        if not isinstance(data, list) or not all(isinstance(r, list) for r in data):
+            raise ValueError(
+                "table 'data' must be a list of row lists.\n"
+                'Example: {"type": "table", "data": [["H1", "H2"], ["a", "b"]]}'
+            )
         rows = len(data)
         cols = max(len(row) for row in data)
         tbl = doc.add_table(rows=rows, cols=cols)
@@ -198,33 +237,48 @@ def _add_block(doc: Document, item: Any) -> None:
         if item.get("col_widths"):
             for i, w in enumerate(item["col_widths"]):
                 if i < len(tbl.columns):
-                    tbl.columns[i].width = Inches(w)
+                    try:
+                        tbl.columns[i].width = Inches(float(w))
+                    except (TypeError, ValueError):
+                        raise ValueError(
+                            f"col_widths[{i}] must be a number of inches, got {w!r}."
+                        ) from None
         if item.get("header_shading") and rows > 0:
             hc = validate_color(item["header_shading"])
             for cell in tbl.rows[0].cells:
                 _set_cell_shading(cell, hc)
         if item.get("cell_shading"):
             for key, color in item["cell_shading"].items():
-                ri, ci = (int(x) for x in key.split(","))
-                if 0 <= ri < rows and 0 <= ci < cols:
-                    _set_cell_shading(tbl.cell(ri, ci), validate_color(color))
+                ri, ci = _parse_rc(key, rows, cols)
+                _set_cell_shading(tbl.cell(ri, ci), validate_color(color))
         if item.get("cell_alignment"):
             for key, align in item["cell_alignment"].items():
-                ri, ci = (int(x) for x in key.split(","))
-                if 0 <= ri < rows and 0 <= ci < cols:
-                    a = ALIGN_MAP.get(validate_align(align))
-                    if a is not None:
-                        for p in tbl.cell(ri, ci).paragraphs:
-                            p.alignment = a
+                ri, ci = _parse_rc(key, rows, cols)
+                a = ALIGN_MAP.get(validate_align(align))
+                if a is not None:
+                    for p in tbl.cell(ri, ci).paragraphs:
+                        p.alignment = a
 
     elif item_type == "image":
+        if not item.get("path"):
+            raise ValueError(
+                "image block requires a 'path' to an image file.\n"
+                'Example: {"type": "image", "path": "/path/to/logo.png", "width_inches": 4}'
+            )
         img_path = Path(item["path"]).expanduser().resolve()
         if not img_path.exists():
-            raise ValueError(f"Image not found: {img_path}")
+            raise ValueError(
+                f"Image not found: {img_path}\nProvide a valid path to an existing image file."
+            )
         width = item.get("width_inches")
         kwargs: dict[str, Any] = {}
         if width is not None:
-            kwargs["width"] = Inches(width)
+            try:
+                kwargs["width"] = Inches(float(width))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"image 'width_inches' must be a number, got {width!r}."
+                ) from None
         doc.add_picture(str(img_path), **kwargs)
 
     elif item_type == "pagebreak":
@@ -232,6 +286,11 @@ def _add_block(doc: Document, item: Any) -> None:
 
     elif item_type == "list":
         items = item.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError(
+                "list 'items' must be a list of strings or {text, level} dicts.\n"
+                'Example: {"type": "list", "items": ["First", {"text": "Nested", "level": 1}]}'
+            )
         ordered = item.get("ordered", False)
         bullet_char = item.get("bullet_char")
         bullet_styles = ["List Bullet", "List Bullet 2", "List Bullet 3"]
@@ -240,8 +299,12 @@ def _add_block(doc: Document, item: Any) -> None:
         for entry in items:
             if isinstance(entry, str):
                 entry = {"text": entry, "level": 0}
+            elif not isinstance(entry, dict):
+                raise ValueError(
+                    f"list item must be a string or a dict, got {type(entry).__name__}."
+                )
             text = sanitize_text(str(entry.get("text", "")), "list item")
-            level = max(0, min(int(entry.get("level", 0)), 5))
+            level = _int_in(entry.get("level", 0), "list item level", 0, 5)
 
             if bullet_char and not ordered:
                 para = doc.add_paragraph(f"{bullet_char} {text}")
@@ -688,3 +751,107 @@ def get_config(path: str) -> dict[str, Any]:
         "table_count": len(doc.tables),
         "metadata": read_metadata(path),
     }
+
+
+def format_cell(
+    path: str,
+    table_index: int,
+    row: int,
+    col: int,
+    *,
+    text: str | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
+    color: str | None = None,
+    size: float | None = None,
+    font: str | None = None,
+    align: str | None = None,
+    vertical_align: str | None = None,
+    shading: str | None = None,
+) -> str:
+    """Format a single table cell: text content, run styling (bold/italic/
+    underline/color/size/font), horizontal + vertical alignment, and fill.
+
+    ``table_index`` is the 0-based index into the document's tables;
+    ``row``/``col`` are 0-based. This fills the gap where the create/append
+    block API can only colour the header row — here any cell's text can be
+    styled (e.g. white text on a dark fill)."""
+    in_ = validate_path(path, must_exist=True, expected_ext="docx", operation="format_cell")
+    try:
+        table_index, row, col = int(table_index), int(row), int(col)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"table_index, row and col must be integers, got "
+            f"({table_index!r}, {row!r}, {col!r})."
+        ) from None
+    if size is not None and (not isinstance(size, (int, float)) or size <= 0):
+        raise ValueError(f"size must be a positive number of points, got {size!r}.")
+    va_norm = validate_choice(vertical_align, "vertical_align", ("top", "center", "middle", "bottom"))
+    doc = Document(str(in_))
+    if not doc.tables:
+        raise ValueError("The document has no tables to format. Add a table first (docx_create/docx_append).")
+    if table_index < 0 or table_index >= len(doc.tables):
+        raise ValueError(
+            f"table_index {table_index} out of range — the document has "
+            f"{len(doc.tables)} table(s), so valid indices are 0..{len(doc.tables) - 1}."
+        )
+    tbl = doc.tables[table_index]
+    nrows, ncols = len(tbl.rows), len(tbl.columns)
+    if not (0 <= row < nrows and 0 <= col < ncols):
+        raise ValueError(
+            f"cell ({row},{col}) is out of range for table {table_index}, which is "
+            f"{nrows} row(s) x {ncols} column(s) (valid row 0..{nrows - 1}, col 0..{ncols - 1})."
+        )
+    cell = tbl.cell(row, col)
+    if text is not None:
+        cell.text = sanitize_text(str(text), "cell text")
+    if shading:
+        _set_cell_shading(cell, validate_color(shading))
+    if va_norm:
+        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT as _VA
+        cell.vertical_alignment = {"top": _VA.TOP, "center": _VA.CENTER,
+                                   "middle": _VA.CENTER, "bottom": _VA.BOTTOM}[va_norm]
+    color_hex = validate_color(color) if color else None
+    for para in cell.paragraphs:
+        if align:
+            a = ALIGN_MAP.get(validate_align(align))
+            if a is not None:
+                para.alignment = a
+        for run in para.runs:
+            if bold is not None:
+                run.bold = bool(bold)
+            if italic is not None:
+                run.italic = bool(italic)
+            if underline is not None:
+                run.underline = bool(underline)
+            if font:
+                run.font.name = font
+            if size:
+                run.font.size = Pt(size)
+            if color_hex:
+                run.font.color.rgb = RGBColor(
+                    int(color_hex[0:2], 16), int(color_hex[2:4], 16), int(color_hex[4:6], 16)
+                )
+    doc.save(str(in_))
+    return str(in_)
+
+
+def extract_images(path: str, out_dir: str | None = None) -> dict:
+    """Extract every embedded image from a .docx into ``out_dir`` (defaults to
+    ``<docname>_images`` next to the file). Returns a dict with the count,
+    directory and saved file paths."""
+    from . import safety
+    in_ = validate_path(path, must_exist=True, expected_ext="docx", operation="extract_images")
+    doc = Document(str(in_))
+    target = Path(out_dir).expanduser().resolve() if out_dir else in_.parent / f"{in_.stem}_images"
+    safety.check_path_safety(target)
+    target.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+    for part in doc.part.package.iter_parts():
+        name = str(part.partname)
+        if name.startswith("/word/media/"):
+            dest = target / Path(name).name
+            dest.write_bytes(part.blob)
+            saved.append(str(dest))
+    return {"count": len(saved), "directory": str(target), "files": saved}

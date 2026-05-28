@@ -8,7 +8,7 @@ from typing import Any
 from pptx import Presentation
 from pptx.util import Inches, Pt
 
-from .validation import validate_path, validate_slide_def, sanitize_text, validate_color
+from .validation import validate_path, validate_slide_def, sanitize_text, validate_color, validate_choice
 
 
 # python-pptx ships with the default Office template. Layout indexes:
@@ -248,5 +248,73 @@ def delete_slide(path: str, slide_index: int) -> str:
         )
     prs.part.drop_rel(rId)
     del prs.slides._sldIdLst[slide_index]
+    prs.save(str(in_))
+    return str(in_)
+
+
+def add_textbox(
+    path: str,
+    slide_index: int,
+    text: str,
+    *,
+    left_in: float = 1.0,
+    top_in: float = 1.0,
+    width_in: float = 8.0,
+    height_in: float = 1.2,
+    font_size: float = 18,
+    bold: bool = False,
+    italic: bool = False,
+    color: str | None = None,
+    align: str = "left",
+) -> str:
+    """Add a free-floating, positioned text box to a slide (0-based index).
+
+    Position/size are in inches. Newlines in ``text`` become separate
+    paragraphs. ``align`` is left/center/right/justify. Returns the file path."""
+    from .validation import validate_slide_index
+    from pptx.enum.text import PP_ALIGN
+    from pptx.dml.color import RGBColor
+
+    in_ = validate_path(path, must_exist=True, expected_ext="pptx", operation="add_textbox")
+    align = validate_choice(align, "align", ("left", "center", "right", "justify"), allow_none=False)
+    for nm, v in (("left_in", left_in), ("top_in", top_in), ("width_in", width_in), ("height_in", height_in)):
+        if not isinstance(v, (int, float)) or not (0 <= v <= 100):
+            raise ValueError(f"{nm} must be a number of inches in [0, 100], got {v!r}.")
+    if not isinstance(font_size, (int, float)) or font_size <= 0:
+        raise ValueError(f"font_size must be a positive number of points, got {font_size!r}.")
+    prs = Presentation(str(in_))
+    validate_slide_index(prs, slide_index)
+    slide = prs.slides[slide_index]
+    box = slide.shapes.add_textbox(Inches(left_in), Inches(top_in), Inches(width_in), Inches(height_in))
+    tf = box.text_frame
+    tf.word_wrap = True
+    tf.text = sanitize_text(str(text), "textbox text")
+    amap = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER,
+            "right": PP_ALIGN.RIGHT, "justify": PP_ALIGN.JUSTIFY}
+    rgb = None
+    if color:
+        h = validate_color(color)
+        rgb = RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    for para in tf.paragraphs:
+        para.alignment = amap.get(align, PP_ALIGN.LEFT)
+        for run in para.runs:
+            run.font.size = Pt(font_size)
+            run.font.bold = bold
+            run.font.italic = italic
+            if rgb is not None:
+                run.font.color.rgb = rgb
+    prs.save(str(in_))
+    return str(in_)
+
+
+def set_speaker_notes(path: str, slide_index: int, notes: str) -> str:
+    """Set (replace) the speaker notes for a slide (0-based index)."""
+    from .validation import validate_slide_index
+
+    in_ = validate_path(path, must_exist=True, expected_ext="pptx", operation="set_speaker_notes")
+    prs = Presentation(str(in_))
+    validate_slide_index(prs, slide_index)
+    slide = prs.slides[slide_index]
+    slide.notes_slide.notes_text_frame.text = sanitize_text(str(notes), "speaker notes")
     prs.save(str(in_))
     return str(in_)

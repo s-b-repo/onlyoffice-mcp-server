@@ -126,9 +126,9 @@ Environment variables:
 | `ONLYOFFICE_MCP_HISTORY_MAX_BYTES` | `104857600` (100 MB) | Total history budget across all docs |
 | `ONLYOFFICE_MCP_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` — logs go to stderr |
 
-## Tools (77 total)
+## Tools (92 total)
 
-### Word (22 tools)
+### Word (26 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -146,8 +146,11 @@ Environment variables:
 | `docx_set_background` | Set page background colour (hex) |
 | `docx_set_background_image` | Set a background image with offset, size, and opacity controls |
 | `docx_set_watermark` | Add a diagonal text watermark on every page |
-| `docx_set_header` | Set header text + alignment on a section |
-| `docx_set_footer` | Set footer text + optional PAGE field for page numbers |
+| `docx_set_header` | Set header text + alignment on a section (with `color`/`size` for dark backgrounds) |
+| `docx_set_footer` | Set footer text + optional PAGE field; `color`/`size` colour the text AND the page number |
+| `docx_format_cell` | Format any table cell: text, bold/italic/underline, colour, size, font, alignment, vertical-align, fill |
+| `docx_place_image` | Place a floating image (logo/crest) at a fixed page position |
+| `docx_extract_images` | Extract every embedded image to a directory |
 | `docx_add_hyperlink` | Append an external hyperlink to a paragraph |
 | `docx_add_internal_link` | Hyperlink targeting an internal bookmark |
 | `docx_add_bookmark` | Wrap a paragraph in a named bookmark |
@@ -156,7 +159,7 @@ Environment variables:
 | `docx_list_comments` | Enumerate existing comments |
 | `docx_add_chart` | Render a chart with matplotlib and embed as image |
 
-### Excel (14 tools)
+### Excel (15 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -174,8 +177,9 @@ Environment variables:
 | `xlsx_delete_sheet` | Delete a sheet (cannot delete the last one) |
 | `xlsx_set_sheet_tab_color` | Colour the workbook tab strip |
 | `xlsx_add_chart` | Add a native editable chart referencing existing cells |
+| `xlsx_format_cells` | Number format, font, fill, alignment, wrap and borders over a cell range |
 
-### PowerPoint (7 tools)
+### PowerPoint (10 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -187,6 +191,26 @@ Environment variables:
 | `pptx_set_slide_background` | Set a solid background colour on one slide or all |
 | `pptx_add_hyperlink` | Set a hyperlink on the first run of a shape |
 | `pptx_add_chart` | Add a native chart to a slide |
+| `pptx_add_textbox` | Add a positioned text box (font/size/colour/bold/align) |
+| `pptx_set_speaker_notes` | Set (replace) a slide's speaker notes |
+
+### Slide graphics (9 tools)
+
+Standalone transparent PNGs for dark, themed report decks — compose as a
+document background (`docx_set_background_image`) or embed as image blocks.
+Supersampled anti-aliasing, gradient/glossy styling, light text.
+
+| Tool | Purpose |
+|------|---------|
+| `graphic_tech_background` | Dark gradient + hexagon grid + glow + vignette + optional branded header band |
+| `graphic_recolor_image` | Recolour a logo to a flat colour on transparency + tight crop |
+| `graphic_key_logo` | Key out a logo's flat background, keeping its original colours |
+| `graphic_donut_chart` | Ring chart with centre label (transparent, stroked labels) |
+| `graphic_bar_chart` | Bars with value labels, optional log scale |
+| `graphic_bubble_cards` | Rounded "bubble" card grid (ID badge + title + impact + severity pill) |
+| `graphic_node_infographic` | Glossy circular value nodes on a dashed zigzag connector |
+| `graphic_numbered_cards` | Numbered recommendation/step cards in columns |
+| `graphic_decorative_panel` | Abstract hexagon cluster with a lock/shield motif |
 
 ### Edit history / version control (8 tools)
 
@@ -260,6 +284,29 @@ Sheet 'Sales' not found in workbook.
 Available sheets: ['Sheet1', 'Revenue', 'Costs']
 Sheet names are case-sensitive.
 ```
+
+### Input validation (fail fast, never silently)
+
+Arguments are validated **before** any file is opened, so malformed or
+incorrect AI input is rejected with an actionable message rather than producing
+a broken document or an opaque stack trace. Nothing is silently coerced or
+ignored — an invalid enum, missing key, or out-of-range value is an error.
+
+- **Enums** (alignment, vertical-align, border style, motif, …) are checked
+  against an explicit set: `Invalid vertical_align: 'sideways'. Valid values: ['bottom', 'center', 'middle', 'top']`.
+- **List-of-dict args** (chart segments, bubble cards, infographic nodes) are
+  validated element-by-element, pointing at the offending index and required
+  key: `segments[0] is missing required key 'value' (keys present: ['label']).`
+  and `segments[0]['value'] must be a number, got 'abc'.`
+- **Ranges / types** are bounded with the limits shown: `cols=99 out of range [1, 6].`,
+  `width_px=10 out of range [64, 8000].`, `font_size must be a positive number of points, got -3.`
+- **Indices** report the actual document shape: `cell (9,9) is out of range for table 0, which is 2 row(s) x 2 column(s) ...`.
+
+At the tool boundary, the async wrapper catches `ValueError` /
+`FileNotFoundError` / `PermissionError` / `RuntimeError` / `OSError` and appends
+concrete **retry guidance**, so the model can self-correct without a crash.
+Internal best-effort cleanup (temp-file removal, history pruning) is the only
+place exceptions are intentionally ignored — never the main operation path.
 
 ## Schemas
 

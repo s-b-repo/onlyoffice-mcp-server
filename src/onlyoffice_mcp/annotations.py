@@ -20,7 +20,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from lxml import etree
 
-from .validation import validate_path, sanitize_text
+from .validation import validate_path, sanitize_text, validate_color
 from .safety import safe_parse_xml
 
 
@@ -43,12 +43,39 @@ _ALIGN_MAP = {
 }
 
 
+def _apply_run_props(para, color=None, size=None) -> None:
+    """Apply font colour (hex) and/or size (pt) to every run in a paragraph,
+    including runs nested inside fields (e.g. the PAGE number)."""
+    if color is None and size is None:
+        return
+    hexc = validate_color(color) if color else None
+    for r in para._p.iter(qn("w:r")):
+        rpr = r.find(qn("w:rPr"))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            r.insert(0, rpr)
+        if hexc:
+            c = rpr.find(qn("w:color"))
+            if c is None:
+                c = OxmlElement("w:color")
+                rpr.append(c)
+            c.set(qn("w:val"), hexc)
+        if size:
+            sz = rpr.find(qn("w:sz"))
+            if sz is None:
+                sz = OxmlElement("w:sz")
+                rpr.append(sz)
+            sz.set(qn("w:val"), str(int(float(size) * 2)))
+
+
 def docx_set_header(
     path: str,
     text: str,
     *,
     align: str = "center",
     section: int = 0,
+    color: str | None = None,
+    size: float | None = None,
 ) -> str:
     from docx import Document
 
@@ -64,6 +91,7 @@ def docx_set_header(
     para = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
     para.text = sanitize_text(text, "header text")
     para.alignment = _ALIGN_MAP.get(align.lower(), 1)
+    _apply_run_props(para, color, size)
     doc.save(str(p))
     return str(p)
 
@@ -75,6 +103,8 @@ def docx_set_footer(
     page_numbers: bool = True,
     align: str = "center",
     section: int = 0,
+    color: str | None = None,
+    size: float | None = None,
 ) -> str:
     from docx import Document
 
@@ -104,6 +134,7 @@ def docx_set_footer(
         rslt_r.append(rslt_t)
         fld.append(rslt_r)
         run._r.addnext(fld)
+    _apply_run_props(para, color, size)
     doc.save(str(p))
     return str(p)
 

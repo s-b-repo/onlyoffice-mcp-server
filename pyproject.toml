@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "onlyoffice-mcp"
-version = "0.3.0a6"
-description = "MCP server for creating, reading, editing and converting ONLYOFFICE-compatible documents (docx, xlsx, pptx) — pure Python with version history, charts, page styling, spell-check, find/replace and optional Document Builder / LibreOffice bridges."
+version = "0.3.0a8"
+description = "MCP server for creating, reading, editing and converting ONLYOFFICE-compatible documents (docx, xlsx, pptx) — pure Python with version history, charts, slide-style graphics (backgrounds, bubble cards, infographics), page styling, spell-check, find/replace and optional Document Builder / LibreOffice bridges."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -31,6 +31,7 @@ dependencies = [
     "python-pptx>=0.6.21",
     "pydantic>=2.0",
     "matplotlib>=3.7",
+    "pillow>=10.0",
     "lxml>=4.9",
     "pyspellchecker>=0.7.2",
 ]
