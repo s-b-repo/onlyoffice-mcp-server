@@ -6,9 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-from .validation import validate_path, validate_cell_ref, validate_sheet_name, sanitize_text
+from .validation import (
+    validate_path, validate_cell_ref, validate_sheet_name, sanitize_text, validate_color,
+    validate_choice,
+)
 
 
 def _sanitize_sheet_name(name: str) -> str:
@@ -214,5 +217,101 @@ def freeze_panes(path: str, sheet: str, cell: str) -> str:
     wb = load_workbook(str(in_))
     validate_sheet_name(wb, sheet)
     wb[sheet].freeze_panes = cell
+    wb.save(str(in_))
+    return str(in_)
+
+
+def format_cells(
+    path: str,
+    sheet: str,
+    cell_range: str,
+    *,
+    number_format: str | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    font_color: str | None = None,
+    font_size: float | None = None,
+    font_name: str | None = None,
+    fill_color: str | None = None,
+    align: str | None = None,
+    valign: str | None = None,
+    wrap_text: bool | None = None,
+    border: str | bool | None = None,
+    border_color: str = "000000",
+) -> str:
+    """Apply rich formatting to a cell or range (e.g. ``"A1"`` or ``"A1:C5"``).
+
+    - ``number_format``: an Excel format code, e.g. ``"#,##0.00"``, ``"0%"``,
+      ``"R#,##0.00"`` (currency), ``"yyyy-mm-dd"``.
+    - Font: ``bold``/``italic``/``font_color`` (hex)/``font_size``/``font_name``.
+    - ``fill_color``: cell background hex.
+    - ``align`` (left/center/right) / ``valign`` (top/center/bottom) / ``wrap_text``.
+    - ``border``: ``true`` or a style name (``thin``/``medium``/``thick``/``double``)
+      applied to all four sides in ``border_color``.
+
+    Existing formatting is preserved where a parameter is omitted."""
+    in_ = validate_path(path, must_exist=True, expected_ext="xlsx", operation="format_cells")
+    if number_format is not None and not isinstance(number_format, str):
+        raise ValueError(
+            f"number_format must be an Excel format-code string, got {number_format!r}.\n"
+            "Examples: '#,##0.00', '0%', 'yyyy-mm-dd', 'R#,##0.00'."
+        )
+    align = validate_choice(align, "align", ("left", "center", "right", "justify", "general", "fill"))
+    valign = validate_choice(valign, "valign", ("top", "center", "bottom", "justify"))
+    border_style = None
+    if border:
+        border_style = validate_choice(
+            border if isinstance(border, str) else "thin", "border",
+            ("thin", "medium", "thick", "double", "dashed", "dotted", "hair"),
+        )
+    wb = load_workbook(str(in_))
+    validate_sheet_name(wb, sheet)
+    ws = wb[sheet]
+    try:
+        sel = ws[cell_range]
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid cell range '{cell_range}'. Use e.g. 'A1' or 'A1:C5'."
+        ) from exc
+    cells = []
+    if isinstance(sel, tuple):
+        for item in sel:
+            if isinstance(item, tuple):
+                cells.extend(item)
+            else:
+                cells.append(item)
+    else:
+        cells.append(sel)
+
+    fc = ("FF" + validate_color(font_color)) if font_color else None
+    fill = PatternFill(fill_type="solid", fgColor="FF" + validate_color(fill_color)) if fill_color else None
+    side = None
+    if border:
+        style = border if isinstance(border, str) else "thin"
+        side = Side(style=style, color="FF" + validate_color(border_color))
+
+    for cell in cells:
+        if number_format is not None:
+            cell.number_format = number_format
+        f = cell.font
+        cell.font = Font(
+            name=font_name or f.name,
+            size=font_size or f.size,
+            bold=bold if bold is not None else f.bold,
+            italic=italic if italic is not None else f.italic,
+            color=fc if fc else f.color,
+        )
+        if fill is not None:
+            cell.fill = fill
+        if align or valign or wrap_text is not None:
+            a = cell.alignment
+            cell.alignment = Alignment(
+                horizontal=align or a.horizontal,
+                vertical=valign or a.vertical,
+                wrap_text=wrap_text if wrap_text is not None else a.wrap_text,
+            )
+        if side is not None:
+            cell.border = Border(left=side, right=side, top=side, bottom=side)
+
     wb.save(str(in_))
     return str(in_)

@@ -41,6 +41,7 @@ from . import (
     cursor,
     docbuilder,
     docx_ops,
+    graphics,
     history,
     libreoffice,
     pptx_ops,
@@ -984,6 +985,45 @@ def docx_set_background_image(
 
 @mcp.tool()
 @_threaded
+@history.record_operation("docx_place_image")
+def docx_place_image(
+    path: str,
+    image_path: str,
+    offset_x_mm: float,
+    offset_y_mm: float,
+    width_mm: float,
+    height_mm: float | None = None,
+    behind: bool = False,
+    name: str = "logo",
+    opacity: int = 100,
+) -> str:
+    """Place a floating image (e.g. a logo/crest) at a FIXED page position on
+    every page, anchored via section headers.
+
+    Unlike ``docx_set_background_image`` (a full-page fill behind text), this
+    drops a small image at a precise spot and, by default, IN FRONT of content —
+    ideal for stamping a logo into a header band or a corner on every page.
+
+    **Position**: ``offset_x_mm`` / ``offset_y_mm`` from the page top-left
+    corner. **Size**: ``width_mm`` is required; ``height_mm`` defaults to keep
+    the image's aspect ratio. Set ``behind=true`` to place it behind text.
+
+    **Replacing vs stacking**: re-running with the same ``name`` replaces that
+    overlay; use a different ``name`` to add another image. ``opacity`` 1–100.
+
+    **Tip**: to put a real colour logo on a dark band, first clean its
+    background with ``graphic_key_logo`` (keeps colours, transparent backing),
+    then place the resulting PNG here. Verify with ``doc_preview`` afterwards."""
+    return styling.docx_place_image(
+        path, image_path,
+        offset_x_mm=offset_x_mm, offset_y_mm=offset_y_mm,
+        width_mm=width_mm, height_mm=height_mm,
+        behind=behind, name=name, opacity=opacity,
+    )
+
+
+@mcp.tool()
+@_threaded
 @history.record_operation("docx_set_watermark")
 def docx_set_watermark(
     path: str,
@@ -1031,13 +1071,17 @@ def docx_set_header(
     text: str,
     align: str = "center",
     section: int = 0,
+    color: str | None = None,
+    size: float | None = None,
 ) -> str:
     """Set the header text on a document section.
 
     ``align``: 'left', 'center', 'right', or 'justify'.
     ``section``: 0-based section index (most documents have only section 0).
+    ``color``: hex font colour (e.g. '#FFFFFF') — needed for headers over a
+    dark page background. ``size``: font size in points.
     """
-    return annotations.docx_set_header(path, text, align=align, section=section)
+    return annotations.docx_set_header(path, text, align=align, section=section, color=color, size=size)
 
 
 @mcp.tool()
@@ -1049,14 +1093,20 @@ def docx_set_footer(
     page_numbers: bool = True,
     align: str = "center",
     section: int = 0,
+    color: str | None = None,
+    size: float | None = None,
 ) -> str:
     """Set the footer text, optionally with auto page numbers.
 
     ``page_numbers``: when true, appends a PAGE field after the text.
     ``section``: 0-based section index (most documents have only section 0).
+    ``color``: hex font colour (e.g. '#9FC4E8') — colours the text AND the page
+    number, so footers stay visible over a dark page background.
+    ``size``: font size in points.
     """
     return annotations.docx_set_footer(
-        path, text, page_numbers=page_numbers, align=align, section=section
+        path, text, page_numbers=page_numbers, align=align, section=section,
+        color=color, size=size,
     )
 
 
@@ -1679,6 +1729,311 @@ def server_info() -> dict:
         },
         "chart_kinds": charts.chart_kinds_info(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Additional formatting & content tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+@_threaded
+@history.record_operation("docx_format_cell")
+def docx_format_cell(
+    path: str,
+    table_index: int,
+    row: int,
+    col: int,
+    text: str | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
+    color: str | None = None,
+    size: float | None = None,
+    font: str | None = None,
+    align: str | None = None,
+    vertical_align: str | None = None,
+    shading: str | None = None,
+) -> str:
+    """Format one table cell (0-based ``table_index``/``row``/``col``).
+
+    Optionally replace ``text``, then style its runs: ``bold``/``italic``/
+    ``underline``, hex ``color``, ``size`` (pt), ``font``; set horizontal
+    ``align`` (left/center/right/justify), ``vertical_align``
+    (top/center/bottom) and cell ``shading`` (hex fill). This is the way to get
+    white (or any-colour) text in a non-header cell — the create/append block
+    API only bolds the header row."""
+    return docx_ops.format_cell(
+        path, table_index, row, col, text=text, bold=bold, italic=italic,
+        underline=underline, color=color, size=size, font=font, align=align,
+        vertical_align=vertical_align, shading=shading,
+    )
+
+
+@mcp.tool()
+@_threaded
+def docx_extract_images(path: str, out_dir: str | None = None) -> dict:
+    """Extract every embedded image from a .docx to ``out_dir`` (defaults to
+    ``<docname>_images`` beside the file). Returns {count, directory, files}."""
+    return docx_ops.extract_images(path, out_dir)
+
+
+@mcp.tool()
+@_threaded
+@history.record_operation("xlsx_format_cells")
+def xlsx_format_cells(
+    path: str,
+    sheet: str,
+    cell_range: str,
+    number_format: str | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    font_color: str | None = None,
+    font_size: float | None = None,
+    font_name: str | None = None,
+    fill_color: str | None = None,
+    align: str | None = None,
+    valign: str | None = None,
+    wrap_text: bool | None = None,
+    border: str | bool | None = None,
+    border_color: str = "000000",
+) -> str:
+    """Apply rich formatting to a cell or range (``"A1"`` or ``"A1:C5"``):
+    ``number_format`` (e.g. '#,##0.00', '0%', 'yyyy-mm-dd'), font
+    (``bold``/``italic``/``font_color``/``font_size``/``font_name``),
+    ``fill_color``, ``align``/``valign``/``wrap_text``, and ``border``
+    (true or 'thin'/'medium'/'thick'/'double') in ``border_color``.
+    Omitted parameters preserve existing formatting."""
+    return xlsx_ops.format_cells(
+        path, sheet, cell_range, number_format=number_format, bold=bold, italic=italic,
+        font_color=font_color, font_size=font_size, font_name=font_name,
+        fill_color=fill_color, align=align, valign=valign, wrap_text=wrap_text,
+        border=border, border_color=border_color,
+    )
+
+
+@mcp.tool()
+@_threaded
+@history.record_operation("pptx_add_textbox")
+def pptx_add_textbox(
+    path: str,
+    slide_index: int,
+    text: str,
+    left_in: float = 1.0,
+    top_in: float = 1.0,
+    width_in: float = 8.0,
+    height_in: float = 1.2,
+    font_size: float = 18,
+    bold: bool = False,
+    italic: bool = False,
+    color: str | None = None,
+    align: str = "left",
+) -> str:
+    """Add a free-floating, positioned text box to a slide (0-based index).
+    Position/size in inches; newlines become separate paragraphs; ``color`` is
+    a hex font colour; ``align`` is left/center/right/justify."""
+    return pptx_ops.add_textbox(
+        path, slide_index, text, left_in=left_in, top_in=top_in, width_in=width_in,
+        height_in=height_in, font_size=font_size, bold=bold, italic=italic,
+        color=color, align=align,
+    )
+
+
+@mcp.tool()
+@_threaded
+@history.record_operation("pptx_set_speaker_notes")
+def pptx_set_speaker_notes(path: str, slide_index: int, notes: str) -> str:
+    """Set (replace) the speaker notes for a slide (0-based index)."""
+    return pptx_ops.set_speaker_notes(path, slide_index, notes)
+
+
+# ---------------------------------------------------------------------------
+# Slide graphics — standalone transparent PNGs for dark, themed report decks.
+# Compose these as a document background (docx_set_background_image) or embed
+# them as image blocks. They render on transparency with light text, so they
+# sit on a dark page. All return the output PNG path.
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+@_threaded
+def graphic_tech_background(
+    out_path: str,
+    width_px: int = 2560,
+    height_px: int = 1440,
+    top_color: str = "#06122a",
+    bottom_color: str = "#0a264a",
+    accent_color: str = "#5aa0e0",
+    hexagons: bool = True,
+    glow: bool = True,
+    dot_wave: bool = True,
+    header_text: str | None = None,
+    header_subtext: str | None = None,
+    header_monogram: str | None = None,
+    logo_path: str | None = None,
+    logo_on_right: bool = True,
+) -> str:
+    """Render a dark gradient "tech" background PNG (default 16:9) with an
+    optional hexagon grid, corner glow and dotted wave. If ``header_text`` or
+    ``logo_path`` are given, a slim header band is baked across the top
+    (monogram + two text lines on one side, a logo on the other) — handy for
+    per-page branding when used as a full-bleed document background."""
+    return graphics.tech_background(
+        out_path, width_px=width_px, height_px=height_px, top_color=top_color,
+        bottom_color=bottom_color, accent_color=accent_color, hexagons=hexagons,
+        glow=glow, dot_wave=dot_wave, header_text=header_text,
+        header_subtext=header_subtext, header_monogram=header_monogram,
+        logo_path=logo_path, logo_on_right=logo_on_right,
+    )
+
+
+@mcp.tool()
+@_threaded
+def graphic_recolor_image(
+    image_path: str,
+    out_path: str,
+    color: str = "#FFFFFF",
+    bright_threshold: int = 232,
+    crop: bool = True,
+    pad: int = 14,
+    scale: int = 3,
+) -> str:
+    """Recolour a logo/mark to a single flat ``color`` on a transparent canvas:
+    the white backing becomes transparent and the ink is repainted (alpha by
+    darkness, keeping smooth edges), then optionally tight-cropped and upscaled.
+    Produces a clean white (or any colour) logo for dark backgrounds."""
+    return graphics.recolor_image(
+        image_path, out_path, color=color, bright_threshold=bright_threshold,
+        crop=crop, pad=pad, scale=scale,
+    )
+
+
+@mcp.tool()
+@_threaded
+def graphic_key_logo(
+    image_path: str,
+    out_path: str,
+    thresh: int = 70,
+    crop: bool = True,
+    pad: int = 8,
+    scale: int = 1,
+    feather: float = 0.0,
+) -> str:
+    """Key a logo's flat background to transparency while KEEPING its original
+    full colour and interior detail — unlike ``graphic_recolor_image`` which
+    flattens the mark to one flat colour. The background is detected by flood-
+    filling inward from the image edges, so light areas enclosed by darker ink
+    (e.g. a white roundel inside a coloured crest) survive. Use this to drop a
+    real colour logo/crest onto a dark page or to overlay it with
+    ``docx_place_image``. ``thresh`` = flood tolerance (higher removes more);
+    ``feather`` softly blurs the cut edge; ``scale`` upsamples 1–6x."""
+    return graphics.key_logo(
+        image_path, out_path, thresh=thresh, crop=crop, pad=pad,
+        scale=scale, feather=feather,
+    )
+
+
+@mcp.tool()
+@_threaded
+def graphic_donut_chart(
+    out_path: str,
+    segments: list[Any],
+    center_text: str | None = None,
+    center_subtext: str | None = None,
+    hole: float = 0.42,
+    show_values: bool = True,
+    dpi: int = 200,
+) -> str:
+    """Render a ring/donut chart on transparency with light labels.
+    ``segments`` = ``[{"label","value","color"}, ...]``; ``center_text`` /
+    ``center_subtext`` are drawn in the hole (e.g. a total). Values are
+    auto-formatted (1.2M / 44 / 975K)."""
+    return graphics.donut_chart(
+        out_path, segments, center_text=center_text, center_subtext=center_subtext,
+        hole=hole, show_values=show_values, dpi=dpi,
+    )
+
+
+@mcp.tool()
+@_threaded
+def graphic_bar_chart(
+    out_path: str,
+    bars: list[Any],
+    horizontal: bool = True,
+    log_scale: bool = False,
+    axis_label: str | None = None,
+    dpi: int = 200,
+) -> str:
+    """Render a bar chart on transparency with light labels and value
+    annotations. ``bars`` = ``[{"label","value","color"}, ...]``. Set
+    ``log_scale`` true when values span orders of magnitude."""
+    return graphics.bar_chart(
+        out_path, bars, horizontal=horizontal, log_scale=log_scale,
+        axis_label=axis_label, dpi=dpi,
+    )
+
+
+@mcp.tool()
+@_threaded
+def graphic_bubble_cards(
+    out_path: str,
+    cards: list[Any],
+    cols: int = 2,
+    width_px: int = 2420,
+    height_px: int = 820,
+) -> str:
+    """Render a grid of rounded "bubble" cards on transparency. Each card =
+    ``{"badge": "C-5", "title": "...", "subtitle": "...", "tag": "CRITICAL",
+    "color": "#C0202A"}``. ``color`` tints the circular badge ring and the
+    pill (pill text auto-darkens on light colours). Card heights are uniform
+    and fill ``height_px`` — ideal for finding/issue summaries. Embed at the
+    page content width (e.g. width_inches ≈ 11.8 on an A4-landscape/16:9 page)."""
+    return graphics.bubble_cards(
+        out_path, cards, cols=cols, width_px=width_px, height_px=height_px,
+    )
+
+
+@mcp.tool()
+@_threaded
+def graphic_node_infographic(
+    out_path: str,
+    nodes: list[Any],
+    width_px: int = 2420,
+    height_px: int = 820,
+) -> str:
+    """Render circular value nodes on a dashed zigzag connector (transparency).
+    ``nodes`` = ``[{"value": "26", "label": "CRITICAL", "color": "#C0202A"}, ...]``.
+    Great for a severity / KPI overview band."""
+    return graphics.node_infographic(out_path, nodes, width_px=width_px, height_px=height_px)
+
+
+@mcp.tool()
+@_threaded
+def graphic_numbered_cards(
+    out_path: str,
+    items: list[Any],
+    cols: int = 2,
+    width_px: int = 2420,
+    height_px: int = 940,
+) -> str:
+    """Render numbered cards (recommendations / steps) in columns on
+    transparency. ``items`` = ``[{"title","subtitle","color"}, ...]`` auto-
+    numbered 1..N column-major; ``color`` tints the number badge (e.g. red =
+    immediate, blue = scheduled). Add ``"n"`` to override a number."""
+    return graphics.numbered_cards(out_path, items, cols=cols, width_px=width_px, height_px=height_px)
+
+
+@mcp.tool()
+@_threaded
+def graphic_decorative_panel(
+    out_path: str,
+    width_px: int = 1500,
+    height_px: int = 760,
+    color: str = "#5aa0e0",
+    motif: str = "lock",
+) -> str:
+    """Render an abstract hexagon-cluster panel with an optional centre motif
+    (``"lock"``, ``"shield"`` or ``"none"``) on transparency — a tasteful visual
+    filler for title/closing slides."""
+    return graphics.decorative_panel(out_path, width_px=width_px, height_px=height_px, color=color, motif=motif)
 
 
 # ---------------------------------------------------------------------------

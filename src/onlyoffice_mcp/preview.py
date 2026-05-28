@@ -1,8 +1,10 @@
 """Document preview — render pages as PNG images for AI visual inspection.
 
-Uses PyMuPDF (fitz) to render PDF pages. Documents are first converted to
-PDF via LibreOffice headless, then individual pages are rendered as PNG at
-the requested DPI.
+Documents are first converted to PDF via LibreOffice headless, then individual
+pages are rendered as PNG at the requested DPI. Rendering uses PyMuPDF (fitz)
+when it is importable, otherwise it falls back to poppler's ``pdftoppm`` /
+``pdfinfo`` command-line tools — so preview works whether or not the optional
+``fitz`` package is installed.
 
 Temp images are written to ~/.onlyoffice-mcp/preview/ and auto-cleaned
 after 30 minutes.
@@ -98,6 +100,70 @@ def _parse_page_range(pages: str | None, total: int) -> list[int]:
     return sorted(set(result))
 
 
+def _try_fitz():
+    """Return the imported ``fitz`` module, or ``None`` if unavailable."""
+    try:
+        import fitz  # PyMuPDF
+        return fitz
+    except Exception:  # ImportError or a broken build
+        return None
+
+
+def _pdf_page_count(pdf_path: Path, fitz_mod) -> int:
+    """Total page count via fitz if available, else poppler ``pdfinfo``."""
+    if fitz_mod is not None:
+        doc = fitz_mod.open(str(pdf_path))
+        try:
+            return doc.page_count
+        finally:
+            doc.close()
+    pdfinfo = shutil.which("pdfinfo")
+    if pdfinfo:
+        result = subprocess.run(
+            [pdfinfo, str(pdf_path)], capture_output=True, text=True, timeout=60,
+        )
+        for line in result.stdout.splitlines():
+            if line.lower().startswith("pages:"):
+                return int(line.split(":", 1)[1].strip())
+    raise RuntimeError(
+        "Cannot render preview: neither PyMuPDF ('fitz') nor poppler ('pdfinfo') "
+        "is available. Install one:\n"
+        "  pip install pymupdf      # or\n"
+        "  sudo apt install poppler-utils"
+    )
+
+
+def _render_page_pdftoppm(pdf_path: Path, page_no: int, dpi: int, out_path: Path) -> tuple[int, int]:
+    """Render a single 1-indexed page to ``out_path`` (PNG) via poppler.
+
+    ``pdftoppm -singlefile`` writes ``<prefix>.png``, so the prefix is the
+    output path with its ``.png`` suffix removed. Returns (width, height) px.
+    """
+    tool = shutil.which("pdftoppm") or shutil.which("pdftocairo")
+    if not tool:
+        raise RuntimeError(
+            "poppler 'pdftoppm' not found (needed when PyMuPDF is absent).\n"
+            "Install it: sudo apt install poppler-utils"
+        )
+    prefix = str(out_path)
+    if prefix.lower().endswith(".png"):
+        prefix = prefix[:-4]
+    cmd = [
+        tool, "-png", "-r", str(dpi),
+        "-f", str(page_no), "-l", str(page_no),
+        "-singlefile", str(pdf_path), prefix,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0 or not out_path.exists():
+        raise RuntimeError(
+            f"pdftoppm failed for page {page_no} (exit {result.returncode}): "
+            f"{result.stderr[:300]}"
+        )
+    from PIL import Image
+    with Image.open(out_path) as im:
+        return im.width, im.height
+
+
 def doc_preview(
     path: str,
     *,
@@ -109,9 +175,8 @@ def doc_preview(
 
     Returns a dict with page image paths, total page count, and rendering
     metadata. The AI can view these images using its file-read capability.
+    Uses PyMuPDF (fitz) when available, otherwise poppler's pdftoppm.
     """
-    import fitz  # PyMuPDF
-
     p = validate_path(path, must_exist=True, operation="doc_preview")
     ext = p.suffix.lstrip(".").lower()
     if ext not in _SUPPORTED_EXTENSIONS:
@@ -126,11 +191,15 @@ def doc_preview(
             f"Recommended: 72 (fast/small), 150 (balanced), 300 (high quality)."
         )
 
+    fitz_mod = _try_fitz()
+    engine = "fitz" if fitz_mod is not None else "pdftoppm"
+
     preview_dir = _preview_dir()
     _cleanup_stale(preview_dir)
 
     pdf_path: Path | None = None
     temp_pdf = False
+    fitz_doc = None
     try:
         if ext == "pdf":
             pdf_path = p
@@ -138,8 +207,7 @@ def doc_preview(
             pdf_path = _convert_to_pdf(p)
             temp_pdf = True
 
-        doc = fitz.open(str(pdf_path))
-        total_pages = len(doc)
+        total_pages = _pdf_page_count(pdf_path, fitz_mod)
 
         page_indices = _parse_page_range(pages, total_pages)
         if len(page_indices) > max_pages:
@@ -148,30 +216,31 @@ def doc_preview(
         else:
             truncated = False
 
-        result_pages: list[dict] = []
-        zoom = dpi / 72.0
-        mat = fitz.Matrix(zoom, zoom)
+        if fitz_mod is not None:
+            fitz_doc = fitz_mod.open(str(pdf_path))
+            zoom = dpi / 72.0
+            mat = fitz_mod.Matrix(zoom, zoom)
 
+        result_pages: list[dict] = []
         stem = p.stem
         ts = int(time.time())
 
         for idx in page_indices:
-            page = doc[idx]
-            pix = page.get_pixmap(matrix=mat)
-
-            out_name = f"{stem}_{ts}_p{idx + 1}.png"
-            out_path = preview_dir / out_name
-            pix.save(str(out_path))
+            out_path = preview_dir / f"{stem}_{ts}_p{idx + 1}.png"
+            if fitz_doc is not None:
+                pix = fitz_doc[idx].get_pixmap(matrix=mat)
+                pix.save(str(out_path))
+                w_px, h_px = pix.width, pix.height
+            else:
+                w_px, h_px = _render_page_pdftoppm(pdf_path, idx + 1, dpi, out_path)
 
             result_pages.append({
                 "page": idx + 1,
                 "path": str(out_path),
-                "width_px": pix.width,
-                "height_px": pix.height,
+                "width_px": w_px,
+                "height_px": h_px,
             })
-            log.info("Rendered page %d → %s (%dx%d)", idx + 1, out_path, pix.width, pix.height)
-
-        doc.close()
+            log.info("Rendered page %d → %s (%dx%d, %s)", idx + 1, out_path, w_px, h_px, engine)
 
         rendered_range = (
             f"{page_indices[0] + 1}-{page_indices[-1] + 1}"
@@ -184,6 +253,7 @@ def doc_preview(
             "rendered": f"{len(result_pages)} of {total_pages} pages ({rendered_range})",
             "truncated": truncated,
             "dpi": dpi,
+            "engine": engine,
             "source": str(p),
             "hint": (
                 "Use your file-read tool to view each page image. "
@@ -191,5 +261,7 @@ def doc_preview(
             ),
         }
     finally:
+        if fitz_doc is not None:
+            fitz_doc.close()
         if temp_pdf and pdf_path and pdf_path.exists():
             pdf_path.unlink(missing_ok=True)

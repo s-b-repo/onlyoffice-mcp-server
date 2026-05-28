@@ -338,6 +338,62 @@ def validate_series_data(series: list[dict], chart_type: str) -> None:
                 )
 
 
+def validate_choice(value, name: str, choices, *, lower: bool = True, allow_none: bool = True):
+    """Validate that ``value`` is one of ``choices`` (case-insensitive by default).
+
+    Returns the normalised value (lower-cased when ``lower``). ``None`` passes
+    through when ``allow_none`` so optional parameters can be left unset.
+    """
+    if value is None:
+        if allow_none:
+            return None
+        raise ValueError(f"{name} is required. Valid values: {sorted(choices)}")
+    norm = value.lower().strip() if (lower and isinstance(value, str)) else value
+    valid = {c.lower() if (lower and isinstance(c, str)) else c for c in choices}
+    if norm not in valid:
+        raise ValueError(
+            f"Invalid {name}: {value!r}.\n"
+            f"Valid values: {sorted(choices)}"
+        )
+    return norm
+
+
+def validate_records(items, name: str, *, required=(), numeric=(), example: str = ""):
+    """Validate a list-of-dicts argument (e.g. chart segments, card definitions).
+
+    Ensures ``items`` is a non-empty list, every element is a dict, all
+    ``required`` keys are present and non-empty, and every ``numeric`` key (when
+    present) is coercible to a number. Raises AI-friendly ValueErrors that point
+    at the offending index and show an example. Returns ``items`` unchanged.
+    """
+    hint = f"\nExample item: {example}" if example else ""
+    if not isinstance(items, list) or not items:
+        raise ValueError(
+            f"{name} must be a non-empty list of dicts, got "
+            f"{type(items).__name__ if not isinstance(items, list) else 'an empty list'}.{hint}"
+        )
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            raise ValueError(
+                f"{name}[{i}] must be a dict, got {type(it).__name__}.{hint}"
+            )
+        for k in required:
+            if k not in it or it[k] is None or it[k] == "":
+                raise ValueError(
+                    f"{name}[{i}] is missing required key '{k}' "
+                    f"(keys present: {sorted(it.keys())}).{hint}"
+                )
+        for k in numeric:
+            if k in it and it[k] is not None:
+                try:
+                    float(it[k])
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"{name}[{i}]['{k}'] must be a number, got {it[k]!r}.{hint}"
+                    ) from None
+    return items
+
+
 def validate_slide_def(slide_def: dict) -> None:
     if not isinstance(slide_def, dict):
         raise ValueError(

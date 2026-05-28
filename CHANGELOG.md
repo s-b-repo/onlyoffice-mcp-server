@@ -7,6 +7,99 @@ and this project follows [PEP 440](https://peps.python.org/pep-0440/) for
 version numbers (`MAJOR.MINOR.PATCH` plus pre-release tags like `a1`, `b1`,
 `rc1`).
 
+## [0.3.0a8] — 2026-05-28 — ⚠️ ALPHA
+
+**This is an alpha release.** Rich per-cell / per-slide formatting, image
+extraction, logo & branding overlays, colour-aware headers/footers, a document
+preview that no longer requires PyMuPDF, and a fail-fast input-validation pass
+that rejects malformed AI input with actionable errors.
+
+### Added
+
+- **7 new tools** (total now **92**):
+  - `docx_format_cell` — format any table cell: optionally replace its text,
+    then style the runs (bold/italic/underline, hex colour, size, font), set
+    horizontal `align` + `vertical_align`, and cell fill `shading`. Enables
+    white-on-dark cells directly — the create/append block API only bolds the
+    header row.
+  - `docx_extract_images` — extract every embedded image from a `.docx` to a
+    directory (defaults to `<docname>_images`); returns `{count, directory, files}`.
+  - `xlsx_format_cells` — apply `number_format`, font (bold/italic/colour/size/
+    name), `fill_color`, alignment, `wrap_text` and borders over a cell or range
+    (`"A1"` / `"A1:C5"`), preserving existing formatting where a parameter is omitted.
+  - `pptx_add_textbox` — add a free-floating, positioned text box (inches) with
+    font/size/colour/bold/alignment; newlines become separate paragraphs.
+  - `pptx_set_speaker_notes` — set (replace) a slide's speaker notes.
+  - `docx_place_image` — place a floating image (logo/crest) at a fixed page
+    position on every page, anchored via section headers. Position is given in
+    mm from the page top-left (`offset_x_mm`/`offset_y_mm`); `width_mm` is
+    required and `height_mm` defaults to preserve the image's aspect ratio. Sits
+    **in front of** text by default (`behind=true` to place it behind, like a
+    background). Covers the default, first-page (`titlePg`) and even-page
+    headers, so it appears on every page including a separate cover. Re-running
+    with the same `name` replaces that overlay; a different `name` stacks.
+    `opacity` 1–100.
+  - `graphic_key_logo` — key a logo's flat background to transparency while
+    **keeping the artwork's original colours and interior detail** (flood-fill
+    inward from the image edges, so light areas enclosed by darker ink — e.g. a
+    white roundel inside a coloured crest — survive rather than being punched
+    out). Complements `graphic_recolor_image`, which flattens the mark to a
+    single flat colour. Controls: `thresh` (flood tolerance), `feather` (soft
+    edge), `crop`/`pad`, `scale` (1–6×).
+
+### Changed
+
+- **`docx_set_header` / `docx_set_footer` gained `color` + `size`** — the colour
+  is applied to the text AND the PAGE-number field, so headers/footers stay
+  visible over a dark page background (previously required a manual XML edit).
+- **`doc_preview` no longer requires PyMuPDF** — it now renders via poppler's
+  `pdftoppm` / `pdfinfo` when `fitz` (PyMuPDF) is unavailable, falling back
+  automatically. The result dict gains an `engine` field (`"fitz"` |
+  `"pdftoppm"`). This fixes `doc_preview` failing with `No module named 'fitz'`
+  in environments without PyMuPDF installed.
+- **Fail-fast input validation (no error swallowing)** — new `validate_choice()`
+  and `validate_records()` helpers in `validation.py`. All new tools **and** the
+  core `_add_block` content path (`docx_create` / `docx_append` /
+  `docx_insert_paragraph`) now reject malformed/incorrect AI input with the
+  standard two-line error instead of crashing or silently producing a broken
+  document:
+  - list-of-dict args (chart segments, bubble cards, infographic nodes) are
+    validated element-by-element for required and numeric keys, pointing at the
+    offending index;
+  - enums (alignment, vertical-align, Excel border style, panel motif) are
+    checked against an explicit set;
+  - ranges/types are bounded (`cols`, image dimensions, `dpi`, font size, points);
+  - a `table` block's `data` must be a list of row-lists and a `list` block's
+    `items` must be a list (both previously yielded **silent garbage**); an
+    `image` block now requires a `path` (previously a bare `KeyError`); and
+    `cell_shading` / `cell_alignment` keys are validated as in-range `"row,col"`.
+
+## [0.3.0a7] — 2026-05-28 — ⚠️ ALPHA
+
+**This is an alpha release.** Slide-style graphic generation for dark-themed
+"deck" reports — standalone PNG renderers (charts, cards, infographics,
+backgrounds) to composite as a document background or embed as page images.
+
+### Added
+
+- **8 new graphic tools** (new `graphics.py` module) — all render on a
+  transparent canvas with light text so they sit on a dark themed page, and
+  supersample for smooth anti-aliased edges:
+  - `graphic_tech_background` — dark gradient + hexagon grid + corner glow +
+    dotted wave + corner vignette, with an optional branded header band
+    (monogram/text on one side, logo on the other)
+  - `graphic_recolor_image` — recolour a logo/mark to a single flat colour on
+    transparency, tight-cropped and optionally upscaled
+  - `graphic_donut_chart` / `graphic_bar_chart` — ring and bar charts on
+    transparency with stroked light labels and value annotations
+  - `graphic_bubble_cards` — rounded "bubble" card grid (circular ID badge +
+    title + impact + severity pill, pill text auto-darkens on light colours)
+  - `graphic_node_infographic` — glossy circular value nodes on a dashed zigzag
+    connector
+  - `graphic_numbered_cards` — auto-numbered recommendation/step cards in columns
+  - `graphic_decorative_panel` — abstract hexagon-cluster panel with an optional
+    centre motif (`lock` / `shield` / `none`)
+
 ## [0.3.0a6] — 2026-05-21 — ⚠️ ALPHA
 
 **This is an alpha release.** Professional document formatting: paragraph

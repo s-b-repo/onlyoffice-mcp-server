@@ -291,6 +291,207 @@ def docx_set_background_image(
 
 
 # --------------------------------------------------------------------------
+# DOCX floating overlay image (logo on every page, in front of / behind text)
+# --------------------------------------------------------------------------
+
+def _build_overlay_anchor_xml(
+    *,
+    r_id: str,
+    cx: int,
+    cy: int,
+    offset_x: int,
+    offset_y: int,
+    doc_pr_id: int,
+    name: str,
+    behind: bool,
+    opacity_pct: int,
+) -> str:
+    """Build the OOXML wp:anchor XML for a page-positioned floating image.
+
+    Unlike the background anchor this defaults to ``behindDoc=0`` (in front of
+    text), is not locked (so a user can nudge it in Word), and carries a caller
+    chosen ``name`` so repeated calls can find and replace it.
+    """
+    if opacity_pct < 100:
+        alpha_xml = f'<a:alphaModFix xmlns:a="{A_NS}" amt="{opacity_pct * 1000}"/>'
+    else:
+        alpha_xml = ""
+    behind_flag = "1" if behind else "0"
+    safe_name = xml.sax.saxutils.escape(name, {'"': "&quot;"})
+
+    return f"""\
+<w:r xmlns:w="{W_NS}" xmlns:wp="{WP_NS}" xmlns:a="{A_NS}"
+     xmlns:pic="{PIC_NS}" xmlns:r="{R_NS}">
+  <w:rPr><w:noProof/></w:rPr>
+  <w:drawing>
+    <wp:anchor distT="0" distB="0" distL="0" distR="0"
+               simplePos="0" relativeHeight="251659000" behindDoc="{behind_flag}"
+               locked="0" layoutInCell="1" allowOverlap="1">
+      <wp:simplePos x="0" y="0"/>
+      <wp:positionH relativeFrom="page">
+        <wp:posOffset>{offset_x}</wp:posOffset>
+      </wp:positionH>
+      <wp:positionV relativeFrom="page">
+        <wp:posOffset>{offset_y}</wp:posOffset>
+      </wp:positionV>
+      <wp:extent cx="{cx}" cy="{cy}"/>
+      <wp:effectExtent l="0" t="0" r="0" b="0"/>
+      <wp:wrapNone/>
+      <wp:docPr id="{doc_pr_id}" name="{safe_name}" descr="Overlay image"/>
+      <wp:cNvGraphicFramePr>
+        <a:graphicFrameLocks noChangeAspect="1"/>
+      </wp:cNvGraphicFramePr>
+      <a:graphic>
+        <a:graphicData uri="{PIC_NS}">
+          <pic:pic>
+            <pic:nvPicPr>
+              <pic:cNvPr id="{doc_pr_id}" name="{safe_name}"/>
+              <pic:cNvPicPr/>
+            </pic:nvPicPr>
+            <pic:blipFill>
+              <a:blip r:embed="{r_id}">{alpha_xml}</a:blip>
+              <a:stretch><a:fillRect/></a:stretch>
+            </pic:blipFill>
+            <pic:spPr>
+              <a:xfrm>
+                <a:off x="0" y="0"/>
+                <a:ext cx="{cx}" cy="{cy}"/>
+              </a:xfrm>
+              <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+            </pic:spPr>
+          </pic:pic>
+        </a:graphicData>
+      </a:graphic>
+    </wp:anchor>
+  </w:drawing>
+</w:r>"""
+
+
+def _remove_overlay_from_header(header_element: etree._Element, name: str) -> None:
+    """Remove any existing overlay anchor with the given docPr name from a header."""
+    for p_el in list(header_element.findall(f"{{{W_NS}}}p")):
+        for r_el in p_el.findall(f"{{{W_NS}}}r"):
+            for drawing in r_el.findall(f"{{{W_NS}}}drawing"):
+                for anchor in drawing.findall(f"{{{WP_NS}}}anchor"):
+                    doc_pr = anchor.find(f"{{{WP_NS}}}docPr")
+                    if doc_pr is not None and doc_pr.get("name") == name:
+                        header_element.remove(p_el)
+                        return
+
+
+def docx_place_image(
+    path: str,
+    image_path: str,
+    *,
+    offset_x_mm: float,
+    offset_y_mm: float,
+    width_mm: float,
+    height_mm: float | None = None,
+    behind: bool = False,
+    name: str = "logo",
+    opacity: int = 100,
+) -> str:
+    """Place a floating image (e.g. a logo/crest) at a fixed page position on
+    every page, anchored via section headers.
+
+    Position is measured from the page top-left corner in mm. The image sits in
+    front of text by default (``behind=True`` puts it behind, like a background).
+    ``height_mm`` defaults to preserve the image's aspect ratio from ``width_mm``.
+    Re-running with the same ``name`` replaces that overlay; a different ``name``
+    adds another (so you can place several logos).
+    """
+    from docx import Document
+    from docx.shared import Mm
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    from . import safety
+
+    p = validate_path(
+        path, must_exist=True, expected_ext="docx", operation="place_image",
+    )
+    img = Path(image_path).expanduser().resolve()
+    safety.check_path_safety(img)
+    if not img.exists():
+        raise ValueError(
+            f"Image not found: {img}\n"
+            f"Provide a valid path to a PNG, JPG, or other image file."
+        )
+    ext = img.suffix.lstrip(".").lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported image format '.{ext}'.\n"
+            f"Allowed: {', '.join(sorted(ALLOWED_IMAGE_EXTENSIONS))}"
+        )
+    safety.check_file_size(img)
+
+    if not width_mm or width_mm <= 0:
+        raise ValueError("width_mm must be a positive number (the image width in mm).")
+    if height_mm is None:
+        from PIL import Image as _PILImage
+        with _PILImage.open(str(img)) as im:
+            iw, ih = im.size
+        height_mm = width_mm * (ih / iw) if iw else width_mm
+    if height_mm <= 0:
+        raise ValueError("height_mm must be a positive number.")
+    if not 1 <= opacity <= 100:
+        raise ValueError(
+            f"opacity={opacity} is out of range [1, 100] (100 = fully opaque)."
+        )
+
+    clean = "".join(c for c in str(name) if c.isalnum() or c in ("-", "_", " ")).strip()[:60]
+    anchor_name = f"Overlay:{clean or 'logo'}"
+
+    cx, cy = int(Mm(width_mm)), int(Mm(height_mm))
+    offset_x, offset_y = int(Mm(offset_x_mm)), int(Mm(offset_y_mm))
+
+    doc = Document(str(p))
+    max_id = max(
+        (int(el.get("id", 0))
+         for el in doc.element.iter()
+         if el.tag.endswith("}docPr") and el.get("id", "").isdigit()),
+        default=0,
+    )
+    doc_pr_id = max_id + 1
+
+    def _add_to_header(header) -> None:
+        nonlocal doc_pr_id
+        header.is_linked_to_previous = False
+        _remove_overlay_from_header(header._element, anchor_name)
+        r_id = header.part.relate_to(
+            doc.part.package.get_or_add_image_part(str(img)), RT.IMAGE,
+        )
+        xml_str = _build_overlay_anchor_xml(
+            r_id=r_id, cx=cx, cy=cy, offset_x=offset_x, offset_y=offset_y,
+            doc_pr_id=doc_pr_id, name=anchor_name, behind=behind, opacity_pct=opacity,
+        )
+        para = etree.SubElement(header._element, f"{{{W_NS}}}p")
+        para.append(safe_parse_xml(xml_str.encode("utf-8")))
+        doc_pr_id += 1
+
+    try:
+        even_odd = bool(doc.settings.odd_and_even_pages_header_footer)
+    except Exception:
+        even_odd = False
+
+    # Cover every header type that the document actually renders, so the image
+    # appears on every page (incl. a separate title page or even pages).
+    for section in doc.sections:
+        _add_to_header(section.header)
+        if section.different_first_page_header_footer:
+            _add_to_header(section.first_page_header)
+        if even_odd:
+            _add_to_header(section.even_page_header)
+
+    log.info(
+        "Overlay image placed: %s → %s as '%s' (offset=%.1f,%.1fmm size=%.1fx%.1fmm behind=%s opacity=%d%%)",
+        img.name, p.name, anchor_name, offset_x_mm, offset_y_mm,
+        width_mm, height_mm, behind, opacity,
+    )
+    doc.save(str(p))
+    return str(p)
+
+
+# --------------------------------------------------------------------------
 # DOCX watermark (VML in header)
 # --------------------------------------------------------------------------
 
